@@ -1,0 +1,24 @@
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Postgres (async)
+asyncpg>=0.30.0
+
+# Redis (async — redis.asyncio is bundled in redis-py >= 4.2)
+redis>=5.2.0
+
+# Metrics — auto-instruments every request with request count + latency histogram
+prometheus-fastapi-instrumentator>=7.0.0
+prometheus-client>=0.21.0
+
+# Data validation
+pydantic>=2.10.0
+
+# EVM JSON-RPC client for Radius payment verification
+web3>=7.0.0
+
+# For testing (not used at runtime)
+httpx>=0.28.0
+pytest>=8.3.0
+pytest-asyncio>=0.24.0

@@ -1,0 +1,123 @@
+name: Build, Sign & Push
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"   # e.g. v1.2.3
+  pull_request:
+    branches:
+      - main
+
+env:
+  IMAGE: amoghjay1908/k8s-chaos-demo
+  # Used by Cosign for keyless signing (OIDC-based)
+  COSIGN_EXPERIMENTAL: "true"
+
+jobs:
+  build-push:
+    name: Build → Push → Sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Required for keyless Cosign signing (Sigstore OIDC token)
+      id-token: write
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Docker Buildx (for multi-platform and cache support) ────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Docker Hub login ────────────────────────────────────────────────────
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Derive image tags ───────────────────────────────────────────────────
+      # On push to main  → :latest + :sha-<short>
+      # On semver tag    → :v1.2.3 + :1.2 + :1 + :latest + :sha-<short>
+      # On pull_request  → :pr-<number> (not pushed)
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=pr
+
+      # ── Build & push ────────────────────────────────────────────────────────
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache: re-use layers from the last successful build
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+      # ── Cosign keyless signing ───────────────────────────────────────────────
+      # Skipped on PRs (image wasn't pushed).
+      # The signature is stored in the same Docker Hub repo (OCI artifact).
+      # Ties into the existing supply-chain-security project's Kyverno policies.
+      - name: Install Cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with Cosign (keyless)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes \
+            "${{ env.IMAGE }}@${DIGEST}"
+
+      # ── Quick smoke-test ─────────────────────────────────────────────────────
+      # Pull the freshly built image and verify it starts + /health returns 200.
+      # Only runs on main / tag pushes (not PRs, where image wasn't pushed).
+      - name: Smoke test
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker pull "${{ env.IMAGE }}@${DIGEST}"
+          docker run -d --name smoke-redis  redis:7-alpine
+          docker run -d --name smoke-postgres \
+            -e POSTGRES_USER=urlshortener \
+            -e POSTGRES_PASSWORD=password \
+            -e POSTGRES_DB=urlshortener \
+            postgres:16-alpine
+          # Give dependencies a moment to start
+          sleep 5
+          docker run --rm \
+            --link smoke-postgres:postgres \
+            --link smoke-redis:redis \
+            -e DATABASE_URL=postgresql://urlshortener:password@postgres:5432/urlshortener \
+            -e REDIS_URL=redis://redis:6379 \
+            -e BASE_URL=http://localhost:8000 \
+            -p 8000:8000 \
+            --name smoke-app \
+            -d "${{ env.IMAGE }}@${DIGEST}"
+          sleep 10
+          # Health check must return 200
+          curl --fail --retry 5 --retry-delay 3 http://localhost:8000/health
+          # Clean up
+          docker rm -f smoke-app smoke-redis smoke-postgres
