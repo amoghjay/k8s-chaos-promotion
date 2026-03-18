@@ -35,4 +35,16 @@ tmp/
 # Local compose override - keep out of git as requested
 docker-compose.yml
 
-chaos-promotion-project-plan-v3.md
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+chaos-promotion-project-plan*.md
