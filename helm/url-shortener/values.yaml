@@ -1,0 +1,62 @@
+image:
+  repository: amoghjay1908/k8s-chaos-demo
+  tag: "latest"           # Kargo overrides per promotion
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+podAntiAffinity:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { cpu: 200m, memory: 256Mi }
+
+app:
+  baseUrl: "http://localhost:8000"
+  codeLength: "8"
+  redisTtl: "3600"
+  workers: "2"
+
+radius:
+  enabled: false
+  rpcUrl: ""
+  serviceWalletAddress: ""
+  sbcContractAddress: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
+  shortenFee: "1000"
+  rpcTimeoutSeconds: "10"
+  chainId: "72344"
+
+postgresql:
+  enabled: true
+  auth:
+    username: urlshortener
+    password: password
+    database: urlshortener
+  primary:
+    persistence: { enabled: true, size: 1Gi }
+
+redis:
+  enabled: true
+  architecture: standalone   # single master pod — correct chaos target
+  auth:
+    enabled: false
+  master:
+    persistence: { enabled: true, size: 1Gi }
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+metrics:
+  enabled: true
+  port: "8000"
+  path: "/metrics"

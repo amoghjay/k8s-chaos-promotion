@@ -1,5 +1,5 @@
 """
-Payment verification module for Radius testnet SBC payments.
+Payment verification module for Radius SBC payments.
 Verifies ERC-20 Transfer events on-chain via standard EVM JSON-RPC.
 """
 
@@ -21,6 +21,8 @@ RADIUS_RPC_URL = os.getenv("RADIUS_RPC_URL", "")
 SERVICE_WALLET = os.getenv("SERVICE_WALLET_ADDRESS", "").lower()
 SBC_CONTRACT = os.getenv("SBC_CONTRACT_ADDRESS", "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb").lower()
 SHORTEN_FEE = int(os.getenv("SHORTEN_FEE", "1000"))
+RADIUS_CHAIN_ID = int(os.getenv("RADIUS_CHAIN_ID", "72344"))
+RPC_TIMEOUT_SECONDS = int(os.getenv("RPC_TIMEOUT_SECONDS", "10"))
 
 # ERC-20 Transfer event signature: Transfer(address,address,uint256)
 TRANSFER_EVENT_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex().lower()
@@ -44,7 +46,10 @@ def init_web3():
         return
 
     try:
-        client = Web3(Web3.HTTPProvider(RADIUS_RPC_URL))
+        client = Web3(Web3.HTTPProvider(
+            RADIUS_RPC_URL,
+            request_kwargs={"timeout": RPC_TIMEOUT_SECONDS}
+        ))
         if client.is_connected():
             w3 = client
             logger.info("Connected to Radius RPC")
@@ -118,7 +123,7 @@ def verify_payment(tx_hash: str) -> PaymentResult:
     if receipt_to != SBC_CONTRACT:
         return PaymentResult(PaymentStatus.WRONG_CONTRACT, "Transaction target is not the SBC contract")
 
-    transfer = _find_transfer_event(receipt.get("logs", []))
+    transfer = _find_transfer_event(receipt.get("logs", []), SBC_CONTRACT)
     if transfer is None:
         return PaymentResult(PaymentStatus.NO_TRANSFER_EVENT, "No valid SBC Transfer event found")
 
@@ -143,7 +148,7 @@ def verify_payment(tx_hash: str) -> PaymentResult:
     )
 
 
-def _find_transfer_event(logs) -> dict | None:
+def _find_transfer_event(logs, stablecoin_contract: str) -> dict | None:
     """
     Search through transaction logs for an ERC-20 Transfer event
     that sends tokens to the SERVICE_WALLET.
@@ -218,7 +223,7 @@ def get_payment_info() -> dict:
         "amount": str(SHORTEN_FEE),
         "token": "SBC",
         "decimals": 6,
-        "chain_id": 72344,
+        "chain_id": RADIUS_CHAIN_ID,
         "sbc_contract": SBC_CONTRACT,
-        "rpc_url": "https://rpc.testnet.radiustech.xyz",
+        "rpc_url": RADIUS_RPC_URL,
     }
