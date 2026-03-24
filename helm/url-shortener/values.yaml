@@ -1,5 +1,5 @@
 image:
-  repository: amoghjay1908/k8s-chaos-demo
+  repository: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener
   tag: "latest"           # Kargo overrides per promotion
   pullPolicy: IfNotPresent
 
@@ -38,7 +38,7 @@ postgresql:
   enabled: true
   auth:
     username: urlshortener
-    password: password
+    password: ""     # never set here — pass via --set postgresql.auth.password=<value> or ESO in Phase 4
     database: urlshortener
   primary:
     persistence: { enabled: true, size: 1Gi }
@@ -55,6 +55,7 @@ serviceAccount:
   create: true
   name: ""
   annotations: {}
+  automount: false
 
 metrics:
   enabled: true

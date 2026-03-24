@@ -1,0 +1,73 @@
+# Namespaces where the URL shortener runs — ServiceMonitors are created for each
+appNamespaces:
+  - url-shortener-dev
+  - url-shortener-staging
+  - url-shortener-prod
+
+kube-prometheus-stack:
+  # Grafana admin password — sourced from K8s secret created by ESO in Phase 4
+  # Secret name: grafana-admin-secret, key: password
+  grafana:
+    adminPassword: ""  # Leave empty; use existing secret below
+    admin:
+      existingSecret: grafana-admin-secret
+      userKey: username
+      passwordKey: password
+
+    # Loki datasource wired in automatically
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        url: http://{{ .Release.Name }}-loki:3100
+        access: proxy
+        isDefault: false
+
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: ALL  # pick up dashboard ConfigMaps from any namespace
+
+  # ServiceMonitor label selector — must match release label set on this chart
+  prometheus:
+    prometheusSpec:
+      serviceMonitorSelector:
+        matchLabels:
+          release: observability
+      serviceMonitorNamespaceSelector: {}  # watch all namespaces
+
+  # Alertmanager not needed yet — simplifies setup
+  alertmanager:
+    enabled: false
+
+  # Disable node-exporter on spot/chaos nodes to avoid scheduling issues
+  nodeExporter:
+    enabled: true
+
+loki:
+  # Single-binary mode — simplest for a project-scale deployment
+  deploymentMode: SingleBinary
+
+  loki:
+    auth_enabled: false
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    limits_config:
+      retention_period: 48h  # Keep 2 days of logs; enough for chaos demo
+
+  singleBinary:
+    replicas: 1
+    persistence:
+      enabled: true
+      size: 1Gi
+
+  # Disable multi-tenant components not needed in single-binary mode
+  backend:
+    replicas: 0
+  read:
+    replicas: 0
+  write:
+    replicas: 0

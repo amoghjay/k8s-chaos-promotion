@@ -48,3 +48,5 @@ override.tf.json
 *_override.tf.json
 
 chaos-promotion-project-plan*.md
+LEARNINGS.md
+action-items.md

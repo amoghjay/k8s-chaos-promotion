@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-shortener-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    # Grafana sidecar picks up ConfigMaps with this label
+    grafana_dashboard: "1"
+data:
+  url-shortener.json: |
+    {
+      "title": "URL Shortener",
+      "uid": "url-shortener",
+      "schemaVersion": 38,
+      "refresh": "10s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate (req/s)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=~\"url-shortener.*\"}[1m])) by (handler, method)",
+              "legendFormat": "{{ "{{handler}} {{method}}" }}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "P99 Latency (ms)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=~\"url-shortener.*\"}[1m])) by (le, handler)) * 1000",
+              "legendFormat": "{{ "{{handler}}" }} p99"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Cache Hit Rate",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "sum(rate(url_shortener_cache_hits_total[5m])) / (sum(rate(url_shortener_cache_hits_total[5m])) + sum(rate(url_shortener_cache_misses_total[5m])))",
+              "legendFormat": "hit rate"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "percentunit", "thresholds": { "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 0.5, "color": "yellow" },
+              { "value": 0.8, "color": "green" }
+            ]}}
+          }
+        },
+        {
+          "id": 4,
+          "title": "URLs Created (total)",
+          "type": "stat",
+          "gridPos": { "x": 6, "y": 8, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "sum(url_shortener_urls_created_total)",
+              "legendFormat": "total"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Payment Verifications",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(payment_verifications_total[1m])) by (status)",
+              "legendFormat": "{{ "{{status}}" }}"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Payment Verification Duration (p99)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket[1m])) by (le)) * 1000",
+              "legendFormat": "p99 ms"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Error Rate",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=~\"url-shortener.*\", status=~\"5..\"}[1m])) by (handler)",
+              "legendFormat": "{{ "{{handler}}" }} errors"
+            }
+          ]
+        }
+      ]
+    }

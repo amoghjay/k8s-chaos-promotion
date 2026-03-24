@@ -1,0 +1,27 @@
+replicaCount: 2
+
+# Anti-affinity spreads pods across nodes so a single node failure doesn't
+# take down the whole app. PDB ensures at least 1 pod stays running during
+# voluntary disruptions (node drain, rolling update).
+podAntiAffinity:
+  enabled: true
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+app:
+  baseUrl: "http://localhost:8080"
+  workers: "2"
+
+radius:
+  enabled: true
+  rpcUrl: ""                  # passed via --set at install time
+  serviceWalletAddress: ""    # passed via --set at install time
+  rpcTimeoutSeconds: "10"     # generous timeout — survives normal network latency
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { cpu: 500m, memory: 512Mi }
+
+serviceAccount:
+  annotations: {}             # WI binding added in Phase 4/5 when ESO is set up

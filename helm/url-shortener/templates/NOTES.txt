@@ -1,0 +1,14 @@
+URL Shortener deployed to namespace: {{ .Release.Namespace }}
+
+  Release:  {{ .Release.Name }}
+  Image:    {{ .Values.image.repository }}:{{ .Values.image.tag }}
+  Replicas: {{ .Values.replicaCount }}
+  Payment:  {{ if .Values.radius.enabled }}enabled (Radius testnet){{ else }}disabled{{ end }}
+
+Access the app:
+  kubectl port-forward svc/{{ include "url-shortener.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+  curl http://localhost:8080/health
+  curl http://localhost:8080/payment-info
+
+Verify pods are running:
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}

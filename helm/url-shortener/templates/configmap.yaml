@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "url-shortener.fullname" . }}-config
+  labels:
+    {{- include "url-shortener.labels" . | nindent 4 }}
+data:
+  BASE_URL: {{ .Values.app.baseUrl | quote }}
+  CODE_LENGTH: {{ .Values.app.codeLength | quote }}
+  REDIS_TTL: {{ .Values.app.redisTtl | quote }}
+  WORKERS: {{ .Values.app.workers | quote }}
+  SBC_CONTRACT_ADDRESS: {{ .Values.radius.sbcContractAddress | quote }}
+  SHORTEN_FEE: {{ .Values.radius.shortenFee | quote }}
+  RPC_TIMEOUT_SECONDS: {{ .Values.radius.rpcTimeoutSeconds | quote }}
+  RADIUS_CHAIN_ID: {{ .Values.radius.chainId | quote }}
+  {{- if .Values.radius.enabled }}
+  SERVICE_WALLET_ADDRESS: {{ .Values.radius.serviceWalletAddress | quote }}
+  {{- end }}

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: observability
+description: Wrapper chart deploying kube-prometheus-stack + Loki with ServiceMonitors and Grafana dashboards for the URL shortener.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  - name: kube-prometheus-stack
+    version: "72.3.0"   # pin with: helm search repo prometheus-community/kube-prometheus-stack
+    repository: https://prometheus-community.github.io/helm-charts
+  - name: loki
+    version: "6.29.0"   # pin with: helm search repo grafana/loki
+    repository: https://grafana.github.io/helm-charts

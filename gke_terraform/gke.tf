@@ -45,8 +45,10 @@ resource "google_container_node_pool" "default" {
   }
 
   node_config {
-    machine_type = var.default_machine_type
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    machine_type    = var.default_machine_type
+    disk_size_gb    = 50
+    service_account = google_service_account.gke_nodes.email
+    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
 
     labels = {
       role = "default"
@@ -72,9 +74,11 @@ resource "google_container_node_pool" "chaos" {
   }
 
   node_config {
-    machine_type = var.chaos_machine_type
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-    spot         = true
+    machine_type    = var.chaos_machine_type
+    disk_size_gb    = 50
+    service_account = google_service_account.gke_nodes.email
+    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+    spot            = true
 
     labels = {
       role = "chaos"

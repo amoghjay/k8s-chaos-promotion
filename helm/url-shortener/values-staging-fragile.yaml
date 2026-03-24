@@ -1,0 +1,27 @@
+# Fragile staging overlay — stacked on top of values-staging.yaml for failure demo (Phase 7.5)
+# Install with: -f values-staging.yaml -f values-staging-fragile.yaml
+#
+# Makes the app brittle in three ways:
+# 1. Single replica + no PDB → one pod kill takes the whole app down
+# 2. rpcTimeoutSeconds: "2" → payment RPC times out under Chaos Mesh network latency injection
+# 3. No persistence → data lost on pod restart, amplifying chaos blast radius
+
+replicaCount: 1
+
+podAntiAffinity:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+
+radius:
+  rpcTimeoutSeconds: "2"      # times out under 3s+ network latency injection
+
+postgresql:
+  primary:
+    persistence:
+      enabled: false          # data lost on pod restart
+
+redis:
+  master:
+    persistence:
+      enabled: false          # cache lost on pod restart

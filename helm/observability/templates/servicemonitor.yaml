@@ -1,0 +1,20 @@
+{{- range .Values.appNamespaces }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: url-shortener-{{ . }}
+  namespace: {{ . }}
+  labels:
+    # Must match kube-prometheus-stack.prometheus.prometheusSpec.serviceMonitorSelector
+    release: observability
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: url-shortener
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+{{- end }}
