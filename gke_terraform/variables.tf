@@ -39,3 +39,9 @@ variable "chaos_machine_type" {
   type        = string
   default     = "e2-medium"
 }
+
+variable "github_repo" {
+  description = "GitHub repository in owner/repo format — used to scope Workload Identity Federation to this repo only"
+  type        = string
+  default     = "amoghjay/k8s-chaos-promotion"
+}

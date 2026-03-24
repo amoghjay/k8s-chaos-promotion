@@ -43,7 +43,7 @@ resource "google_iam_workload_identity_pool_provider" "github_provider" {
   }
 
   # Restrict to this specific repo — prevents other repos from using this pool
-  attribute_condition = "attribute.repository == 'amoghjay1908/k8s-chaos-promotion'"
+  attribute_condition = "attribute.repository == '${var.github_repo}'"
 }
 
 # Dedicated SA for GitHub Actions — only has write access to GAR
@@ -64,7 +64,7 @@ resource "google_project_iam_member" "github_actions_gar_writer" {
 resource "google_service_account_iam_member" "github_oidc_binding" {
   service_account_id = google_service_account.github_actions.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/amoghjay1908/k8s-chaos-promotion"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/${var.github_repo}"
 }
 
 output "workload_identity_provider" {
