@@ -6,12 +6,16 @@ on:
       - main
     tags:
       - "v*.*.*"   # e.g. v1.2.3
+    # paths:
+    #   - "app/**"
   pull_request:
     branches:
       - main
+    # paths:
+    #   - "app/**"
 
 env:
-  IMAGE: amoghjay1908/k8s-chaos-demo
+  IMAGE: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener
   # Used by Cosign for keyless signing (OIDC-based)
   COSIGN_EXPERIMENTAL: "true"
 
@@ -21,8 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      # Required for keyless Cosign signing (Sigstore OIDC token)
+      # Required for GCP Workload Identity Federation + Cosign keyless signing
       id-token: write
 
     steps:
@@ -34,13 +37,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ── Docker Hub login ────────────────────────────────────────────────────
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+      # ── Authenticate to GCP via Workload Identity Federation ────────────────
+      # Keyless — no stored secrets. GitHub OIDC token is exchanged for a
+      # short-lived GCP access token scoped to github-actions-sa.
+      - name: Authenticate to GCP
+        id: auth
+        uses: google-github-actions/auth@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          workload_identity_provider: projects/241566214193/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
+          service_account: github-actions-sa@amoghdevops.iam.gserviceaccount.com
+
+      # ── Configure Docker to use gcloud credentials for GAR ──────────────────
+      - name: Configure Docker for GAR
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
       # ── Derive image tags ───────────────────────────────────────────────────
       # On push to main  → :latest + :sha-<short>
@@ -70,14 +79,13 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Layer cache: re-use layers from the last successful build
+          # Layer cache stored in GAR alongside the image
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
 
       # ── Cosign keyless signing ───────────────────────────────────────────────
       # Skipped on PRs (image wasn't pushed).
-      # The signature is stored in the same Docker Hub repo (OCI artifact).
-      # Ties into the existing supply-chain-security project's Kyverno policies.
+      # Signature stored as an OCI artifact in GAR alongside the image.
       - name: Install Cosign
         if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3
@@ -105,7 +113,6 @@ jobs:
             -e POSTGRES_PASSWORD=password \
             -e POSTGRES_DB=urlshortener \
             postgres:16-alpine
-          # Give dependencies a moment to start
           sleep 5
           docker run --rm \
             --link smoke-postgres:postgres \
@@ -117,7 +124,5 @@ jobs:
             --name smoke-app \
             -d "${{ env.IMAGE }}@${DIGEST}"
           sleep 10
-          # Health check must return 200
           curl --fail --retry 5 --retry-delay 3 http://localhost:8000/health
-          # Clean up
           docker rm -f smoke-app smoke-redis smoke-postgres
