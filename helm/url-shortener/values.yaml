@@ -38,8 +38,11 @@ postgresql:
   enabled: true
   auth:
     username: urlshortener
-    password: ""     # never set here — pass via --set postgresql.auth.password=<value> or ESO in Phase 4
     database: urlshortener
+    existingSecret: ""          # set per-environment in values overlays when externalSecrets.enabled=true
+    secretKeys:
+      adminPasswordKey: DATABASE_PASSWORD
+      userPasswordKey: DATABASE_PASSWORD
   primary:
     persistence: { enabled: true, size: 1Gi }
 

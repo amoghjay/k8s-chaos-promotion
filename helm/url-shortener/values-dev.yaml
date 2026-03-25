@@ -22,6 +22,10 @@ resources:
 serviceAccount:
   annotations: {}             # WI binding added in Phase 4/5 when ESO is set up
 
+postgresql:
+  auth:
+    existingSecret: url-shortener-dev-secret
+
 externalSecrets:
   enabled: true
   radiusRpcUrlSecret: "radius-rpc-url-testnet"

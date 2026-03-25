@@ -23,7 +23,7 @@ resources:
 
 postgresql:
   auth:
-    password: ""              # passed via --set at install time — never commit prod passwords
+    existingSecret: url-shortener-prod-secret
   primary:
     persistence:
       enabled: true
