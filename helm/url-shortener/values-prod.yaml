@@ -12,8 +12,9 @@ app:
 
 radius:
   enabled: true
-  rpcUrl: ""                  # passed via --set at install time
-  serviceWalletAddress: ""    # passed via --set at install time
+  rpcUrl: ""                  # injected via ESO ExternalSecret
+  serviceWalletAddress: ""    # injected via ESO ExternalSecret
+  chainId: "723"              # mainnet
   rpcTimeoutSeconds: "10"
 
 resources:
@@ -30,3 +31,8 @@ postgresql:
 
 serviceAccount:
   annotations: {}             # WI binding added in Phase 4/5 when ESO is set up
+
+externalSecrets:
+  enabled: true
+  radiusRpcUrlSecret: "radius-rpc-url-mainnet"
+  serviceWalletSecret: "service-wallet-address-mainnet"

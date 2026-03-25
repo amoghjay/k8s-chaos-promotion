@@ -25,3 +25,8 @@ resources:
 
 serviceAccount:
   annotations: {}             # WI binding added in Phase 4/5 when ESO is set up
+
+externalSecrets:
+  enabled: true
+  radiusRpcUrlSecret: "radius-rpc-url-testnet"
+  serviceWalletSecret: "service-wallet-address-testnet"

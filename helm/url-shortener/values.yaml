@@ -61,3 +61,10 @@ metrics:
   enabled: true
   port: "8000"
   path: "/metrics"
+
+externalSecrets:
+  enabled: false                          # true in dev/staging/prod — false for local dev without ESO
+  secretStoreName: "gcp-secret-manager"
+  secretStoreKind: "ClusterSecretStore"
+  radiusRpcUrlSecret: "radius-rpc-url-testnet"       # GCP Secret Manager key name
+  serviceWalletSecret: "service-wallet-address-testnet"
