@@ -6,13 +6,13 @@ on:
       - main
     tags:
       - "v*.*.*"   # e.g. v1.2.3
-    # paths:
-    #   - "app/**"
+    paths:
+      - "app/**"
   pull_request:
     branches:
       - main
-    # paths:
-    #   - "app/**"
+    paths:
+      - "app/**"
 
 env:
   IMAGE: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener
