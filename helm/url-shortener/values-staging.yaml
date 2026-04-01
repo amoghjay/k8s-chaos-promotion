@@ -1,3 +1,6 @@
+image:
+  tag: "latest"  # managed by Kargo — do not edit manually
+
 replicaCount: 2
 
 # Anti-affinity spreads pods across nodes so a single node failure doesn't
