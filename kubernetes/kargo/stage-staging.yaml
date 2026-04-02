@@ -1,0 +1,34 @@
+apiVersion: kargo.akuity.io/v1alpha1
+kind: Stage
+metadata:
+  name: staging
+  namespace: url-shortener
+spec:
+  requestedFreight:
+    - origin:
+        kind: Warehouse
+        name: url-shortener
+      sources:
+        stages:
+          - dev  # only receives freight that has been verified in dev
+
+  promotionTemplate:
+    spec:
+      vars:
+        - name: repoURL
+          value: https://github.com/amoghjay/k8s-chaos-promotion.git
+
+      steps:
+        - task:
+            name: promote-with-pr  # PR-based promotion with auto-merge
+          vars:
+            - name: repoURL
+              value: ${{ vars.repoURL }}
+
+  # Health check after promotion — Phase 7 adds chaos experiments here
+  verification:
+    analysisTemplates:
+      - templateName: health-check
+    args:
+      - name: service-url
+        value: http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80

@@ -1,0 +1,29 @@
+apiVersion: kargo.akuity.io/v1alpha1
+kind: Stage
+metadata:
+  name: prod
+  namespace: url-shortener
+spec:
+  requestedFreight:
+    - origin:
+        kind: Warehouse
+        name: url-shortener
+      sources:
+        stages:
+          - staging  # only receives freight that has been verified in staging
+
+  promotionTemplate:
+    spec:
+      vars:
+        - name: repoURL
+          value: https://github.com/amoghjay/k8s-chaos-promotion.git
+
+      steps:
+        - task:
+            name: promote-with-pr
+          vars:
+            - name: repoURL
+              value: ${{ vars.repoURL }}
+
+  # No verification — prod is a manual gate only
+  # Approval happens in Kargo UI before promotion even starts
