@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "v*.*.*"   # e.g. v1.2.3
     paths:
       - "app/**"
   pull_request:
@@ -52,18 +50,15 @@ jobs:
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
       # ── Derive image tags ───────────────────────────────────────────────────
-      # On push to main  → :latest + :sha-<short>
-      # On semver tag    → :v1.2.3 + :1.2 + :1 + :latest + :sha-<short>
+      # On push to main  → :sha-<short> + :latest
       # On pull_request  → :pr-<number> (not pushed)
+      # Kargo Warehouse picks up sha- tags via NewestBuild strategy
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=pr

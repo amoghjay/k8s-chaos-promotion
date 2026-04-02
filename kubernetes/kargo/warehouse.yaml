@@ -1,0 +1,13 @@
+apiVersion: kargo.akuity.io/v1alpha1
+kind: Warehouse
+metadata:
+  name: url-shortener
+  namespace: url-shortener
+spec:
+  subscriptions:
+    - image:
+        repoURL: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener
+        imageSelectionStrategy: NewestBuild  # picks latest by build time — every main push = new freight
+        allowTags: ^sha-[a-f0-9]+$           # match sha-<short> tags pushed by CI (e.g. sha-a1b2c3d)
+        ignoreTags:
+          - latest                           # never treat the mutable latest tag as promotable freight
