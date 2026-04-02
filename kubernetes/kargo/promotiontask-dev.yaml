@@ -1,0 +1,59 @@
+apiVersion: kargo.akuity.io/v1alpha1
+kind: PromotionTask
+metadata:
+  name: promote-dev
+  namespace: url-shortener
+spec:
+  vars:
+    - name: repoURL
+
+  steps:
+    # Step 1: Clone repo, check out main
+    - uses: git-clone
+      config:
+        repoURL: ${{ vars.repoURL }}
+        checkout:
+          - branch: main
+            path: ./src
+
+    # Step 2: Read current deployedCommit so we can store it as previousCommit
+    - uses: yaml-parse
+      as: parse-config
+      config:
+        path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
+        outputs:
+          - name: previousCommit
+            fromExpression: deployedCommit
+
+    # Step 3: Update image.tag in the env values file
+    - uses: yaml-update
+      as: update-image
+      config:
+        path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
+        updates:
+          - key: image.tag
+            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+
+    # Step 4: Update deployment tracking in config file
+    - uses: yaml-update
+      as: update-config
+      config:
+        path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
+        updates:
+          - key: deployedCommit
+            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+          - key: previousCommit
+            value: ${{ quote(outputs['parse-config'].previousCommit) }}
+
+    # Step 5: Commit both changed files
+    - uses: git-commit
+      config:
+        path: ./src
+        message: "chore(dev): promote to ${{ imageFrom('us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener').Tag }}"
+
+    # Step 6: Push directly to main — ArgoCD detects and syncs immediately
+    # No PR for dev — speed over auditability at this stage
+    - uses: git-push
+      config:
+        path: ./src
+        targetBranch: main
