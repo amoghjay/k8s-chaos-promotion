@@ -16,16 +16,7 @@ spec:
           - branch: main
             path: ./src
 
-    # Step 2: Read current deployedCommit to store as previousCommit
-    - uses: yaml-parse
-      as: parse-config
-      config:
-        path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
-        outputs:
-          - name: previousCommit
-            fromExpression: deployedCommit
-
-    # Step 3: Update image.tag in the env values file
+    # Step 2: Update image.tag in the env values file
     - uses: yaml-update
       as: update-image
       config:
@@ -34,31 +25,28 @@ spec:
           - key: image.tag
             value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
 
-    # Step 4: Update deployment tracking in config file
+    # Step 3: Update deployedCommit in config file
     - uses: yaml-update
-      as: update-config
       config:
         path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
         updates:
           - key: deployedCommit
             value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
-          - key: previousCommit
-            value: ${{ quote(outputs['parse-config'].previousCommit ?? "none") }}
 
-    # Step 5: Commit both changed files
+    # Step 4: Commit both changed files
     - uses: git-commit
       config:
         path: ./src
         message: "chore(${{ ctx.stage }}): promote to ${{ imageFrom('us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener').Tag }}"
 
-    # Step 6: Push to a generated temp branch (not directly to main)
+    # Step 5: Push to a generated temp branch (not directly to main)
     - uses: git-push
       as: push
       config:
         path: ./src
-        generateTargetBranch: true  # creates kargo/promote-<uuid> branch
+        generateTargetBranch: true
 
-    # Step 7: Open PR from temp branch → main with auto-merge enabled
+    # Step 6: Open PR from temp branch → main with auto-merge enabled
     # Requires: Settings → General → Allow auto-merge enabled on the GitHub repo
     - uses: git-open-pr
       as: open-pr
@@ -67,16 +55,15 @@ spec:
         createTargetBranch: false
         sourceBranch: ${{ outputs.push.branch }}
         targetBranch: main
-        autoMerge: true  # GitHub merges automatically once checks pass
+        autoMerge: true
 
-    # Step 8: Block promotion completion until PR is merged
-    # Freight is only marked verified after the commit lands on main
+    # Step 7: Block until PR merges
     - uses: git-wait-for-pr
       config:
         repoURL: ${{ vars.repoURL }}
         prNumber: ${{ outputs['open-pr'].pr.id }}
 
-    # Step 9: Trigger immediate ArgoCD sync after PR merges — no waiting for polling
+    # Step 8: Trigger immediate ArgoCD sync after PR merges
     - uses: argocd-update
       config:
         apps:

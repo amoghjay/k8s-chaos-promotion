@@ -16,16 +16,7 @@ spec:
           - branch: main
             path: ./src
 
-    # Step 2: Read current deployedCommit so we can store it as previousCommit
-    - uses: yaml-parse
-      as: parse-config
-      config:
-        path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
-        outputs:
-          - name: previousCommit
-            fromExpression: deployedCommit
-
-    # Step 3: Update image.tag in the env values file
+    # Step 2: Update image.tag in the env values file
     - uses: yaml-update
       as: update-image
       config:
@@ -34,30 +25,27 @@ spec:
           - key: image.tag
             value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
 
-    # Step 4: Update deployment tracking in config file
+    # Step 3: Update deployedCommit in config file
     - uses: yaml-update
-      as: update-config
       config:
         path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
         updates:
           - key: deployedCommit
             value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
-          - key: previousCommit
-            value: ${{ quote(outputs['parse-config'].previousCommit ?? "none") }}
 
-    # Step 5: Commit both changed files
+    # Step 4: Commit both changed files
     - uses: git-commit
       config:
         path: ./src
         message: "chore(dev): promote to ${{ imageFrom('us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener').Tag }}"
 
-    # Step 6: Push directly to main
+    # Step 5: Push directly to main
     - uses: git-push
       config:
         path: ./src
         targetBranch: main
 
-    # Step 7: Trigger immediate ArgoCD sync — no waiting for 3min polling interval
+    # Step 6: Trigger immediate ArgoCD sync
     - uses: argocd-update
       config:
         apps:
