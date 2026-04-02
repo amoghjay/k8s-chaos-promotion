@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: url-shortener
+  namespace: argocd
+spec:
+  # List generator: hardcode the environments.
+  # Kargo does NOT need to know about this — it just pushes commits to main.
+  # ArgoCD detects the changed values file and syncs automatically.
+  generators:
+    - list:
+        elements:
+          - env: dev
+            namespace: url-shortener-dev
+            valuesFile: values-dev.yaml
+          - env: staging
+            namespace: url-shortener-staging
+            valuesFile: values-staging.yaml
+          - env: prod
+            namespace: url-shortener-prod
+            valuesFile: values-prod.yaml
+
+  template:
+    metadata:
+      name: url-shortener-{{env}}
+      namespace: argocd
+      annotations:
+        kargo.akuity.io/authorized-stage: "url-shortener:{{env}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/amoghjay/k8s-chaos-promotion.git
+        targetRevision: HEAD  # always track main branch HEAD
+        path: helm/url-shortener
+        helm:
+          valueFiles:
+            - values.yaml         # base values (image.repository, defaults)
+            - "{{valuesFile}}"    # env overlay (image.tag managed by Kargo, replicas, resources etc.)
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{namespace}}"
+      syncPolicy:
+        automated:
+          prune: true      # remove resources deleted from helm chart
+          selfHeal: true   # re-sync if cluster state drifts from git
+        syncOptions:
+          - CreateNamespace=true
