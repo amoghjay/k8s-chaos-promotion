@@ -43,7 +43,7 @@ spec:
           - key: deployedCommit
             value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
           - key: previousCommit
-            value: ${{ quote(outputs['parse-config'].previousCommit) }}
+            value: ${{ quote(outputs['parse-config'].previousCommit ?? "none") }}
 
     # Step 5: Commit both changed files
     - uses: git-commit
