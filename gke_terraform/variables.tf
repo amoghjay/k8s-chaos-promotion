@@ -31,7 +31,7 @@ variable "default_node_count" {
 variable "default_machine_type" {
   description = "Default machine type for GKE nodes"
   type        = string
-  default     = "e2-medium"
+  default     = "e2-standard-2"
 }
 
 variable "chaos_machine_type" {

@@ -28,7 +28,7 @@ spec:
   # Health check after promotion — Phase 7 adds chaos experiments here
   verification:
     analysisTemplates:
-      - templateName: health-check
+      - name: health-check
     args:
       - name: service-url
         value: http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80

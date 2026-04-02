@@ -28,7 +28,7 @@ spec:
   # Staging will only receive freight that passed this check
   verification:
     analysisTemplates:
-      - templateName: health-check
+      - name: health-check
     args:
       - name: service-url
         value: http://url-shortener-dev.url-shortener-dev.svc.cluster.local:80
