@@ -75,3 +75,11 @@ spec:
       config:
         repoURL: ${{ vars.repoURL }}
         prNumber: ${{ outputs['open-pr'].pr.id }}
+
+    # Step 9: Trigger immediate ArgoCD sync after PR merges — no waiting for polling
+    - uses: argocd-update
+      config:
+        apps:
+          - name: url-shortener-${{ ctx.stage }}
+            sources:
+              - repoURL: ${{ vars.repoURL }}

@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: health-check
+  namespace: url-shortener
+spec:
+  args:
+    # Passed by each Stage — e.g. http://url-shortener-dev.url-shortener-dev.svc.cluster.local:8000
+    - name: service-url
+
+  metrics:
+    - name: health-check
+      # Run 3 times, 20s apart — confirms the app is stably healthy, not just briefly up
+      count: 3
+      interval: 20s
+      failureLimit: 1  # allow 1 failure (transient blip) before marking unhealthy
+
+      provider:
+        web:
+          url: "{{args.service-url}}/health"
+          jsonPath: "{$.status}"
+
+      # Accept both "ok" (all deps up) and "degraded" (redis down, app still functional)
+      # Fail only on "unhealthy" (postgres down) or non-200 HTTP response
+      successCondition: result == "ok" || result == "degraded"

@@ -1,0 +1,16 @@
+apiVersion: kargo.akuity.io/v1alpha1
+kind: ProjectConfig
+metadata:
+  name: url-shortener
+  namespace: url-shortener
+spec:
+  promotionPolicies:
+    - stageSelector:
+        name: dev
+      autoPromotionEnabled: true   # every new freight auto-promotes to dev
+    - stageSelector:
+        name: staging
+      autoPromotionEnabled: false  # manual promote after dev verification passes
+    - stageSelector:
+        name: prod
+      autoPromotionEnabled: false  # manual gate — approve in Kargo UI
