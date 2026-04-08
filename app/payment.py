@@ -114,6 +114,9 @@ def verify_payment(tx_hash: str) -> PaymentResult:
         return PaymentResult(PaymentStatus.RPC_ERROR, "RPC error while fetching transaction receipt")
 
     if not receipt:
+        import time; time.sleep(0.2)
+        receipt = w3.eth.get_transaction_receipt(tx_hash)
+    if not receipt:
         return PaymentResult(PaymentStatus.TX_NOT_FOUND, "Transaction receipt not found")
 
     if receipt.get("status") != 1:
@@ -140,6 +143,7 @@ def verify_payment(tx_hash: str) -> PaymentResult:
             sender=transfer["sender"],
         )
 
+    logger.info("Payment verified: sender=%s amount=%d hash=%s", transfer["sender"], amount, tx_hash)
     return PaymentResult(
         PaymentStatus.SUCCESS,
         "Payment verified successfully",

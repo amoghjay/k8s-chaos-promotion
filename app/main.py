@@ -9,6 +9,7 @@ import string
 import logging
 from contextlib import asynccontextmanager
 
+import asyncio
 import asyncpg
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
@@ -253,7 +254,7 @@ async def shorten_url(body: ShortenRequest):
 
             tx_hash = body.tx_hash.strip()
             with PAYMENT_VERIFICATION_DURATION.time():
-                payment_result = verify_payment(tx_hash)
+                payment_result = await asyncio.to_thread(verify_payment, tx_hash)
 
             PAYMENT_VERIFICATIONS.labels(status=payment_result.status.value).inc()
             if payment_result.status == PaymentStatus.RPC_ERROR:
