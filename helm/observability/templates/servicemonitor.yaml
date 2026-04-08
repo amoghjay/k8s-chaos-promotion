@@ -25,6 +25,7 @@ spec:
       # kube-prometheus-stack does this via default relabeling, but being explicit is safer and
       # makes it clear why {namespace="$namespace"} works in PromQL queries.
       relabelings:
-        - sourceLabels: [__meta_kubernetes_namespace]
+        - action: replace
+          sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: namespace
 {{- end }}
