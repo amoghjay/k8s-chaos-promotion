@@ -88,7 +88,7 @@ loki:
     # Compactor must be enabled for retention_period to actually delete old logs
     compactor:
       retention_enabled: true
-      delete_requests_store: filesystem # for single-binary mode, as object store is not used
+      delete_request_store: filesystem # for single-binary mode, as object store is not used
 
     limits_config:
       retention_period: 48h
