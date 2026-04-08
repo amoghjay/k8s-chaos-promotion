@@ -66,6 +66,13 @@ promtail:
 loki:
   deploymentMode: SingleBinary
 
+  chunksCache:
+    enabled: false  # for single-binary mode, as local filesystem is used for both chunks and index, so no need for separate cache
+  resultsCache:
+    enabled: false  # for single-binary mode, as local filesystem is used for both chunks and index, so no need for separate cache
+
+
+
   loki:
     auth_enabled: false
     commonConfig:
