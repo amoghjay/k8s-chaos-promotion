@@ -1,0 +1,169 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-loadgen-script
+  namespace: url-shortener-staging
+data:
+  loadgen.js: |
+    import http from 'k6/http';
+    import { check, sleep } from 'k6';
+    import { Rate } from 'k6/metrics';
+
+    // ── Custom metrics ────────────────────────────────────────────────────────────
+    const paymentSuccessRate = new Rate('payment_success_rate');
+    const payment402Rate     = new Rate('payment_402_rate');
+    const payment409Rate     = new Rate('payment_409_rate');
+    const redirectOkRate     = new Rate('redirect_ok_rate');
+    const faucetOkRate       = new Rate('faucet_ok_rate');
+
+    // ── ENV vars ──────────────────────────────────────────────────────────────────
+    const BASE_URL               = __ENV.BASE_URL    || 'http://url-shortener.url-shortener-staging.svc.cluster.local:80';
+    const FAUCET_URL             = __ENV.FAUCET_URL  || 'https://testnet.radiustech.xyz/api/v1/faucet';
+    const SERVICE_WALLET_ADDRESS = __ENV.SERVICE_WALLET_ADDRESS; // required — from k8s secret
+    const PAYMENT_ENABLED        = (__ENV.PAYMENT_ENABLED || 'true') === 'true';
+
+    // ── Options ───────────────────────────────────────────────────────────────────
+    export const options = {
+      vus:      parseInt(__ENV.VUS      || '2'),
+      duration: __ENV.DURATION          || '3m',
+
+      // Phase 5 baseline — tighten once chaos is introduced in Phase 6
+      thresholds: {
+        http_req_duration:    ['p(95)<500'],
+        http_req_failed:      ['rate<0.05'],
+        payment_success_rate: ['rate>0.95'],
+      },
+    };
+
+    // ── Per-VU state ──────────────────────────────────────────────────────────────
+    // VU-local flag: set to true if faucet returns signature_required, so this VU
+    // falls back to no-payment mode for all remaining iterations.
+    let vuNoPayment = false;
+    let signatureWarnedOnce = false;
+
+    // ── Main loop ─────────────────────────────────────────────────────────────────
+    export default function () {
+      if (!SERVICE_WALLET_ADDRESS) {
+        console.error('SERVICE_WALLET_ADDRESS is required but not set');
+        return;
+      }
+
+      let txHash = null;
+
+      // ── Step 1: Faucet drip ───────────────────────────────────────────────────
+      if (PAYMENT_ENABLED && !vuNoPayment) {
+        const drip = http.post(
+          `${FAUCET_URL}/drip`,
+          JSON.stringify({ address: SERVICE_WALLET_ADDRESS, token: 'SBC' }),
+          { headers: { 'Content-Type': 'application/json' } },
+        );
+
+        let body = {};
+        try { body = JSON.parse(drip.body); } catch (_) {}
+
+        if (body.error === 'signature_required') {
+          // Faucet re-enabled signatures — degrade gracefully for this VU
+          if (!signatureWarnedOnce) {
+            console.warn('Faucet returned signature_required. Falling back to no-payment mode for this VU.');
+            signatureWarnedOnce = true;
+          }
+          vuNoPayment = true;
+          faucetOkRate.add(false);
+        } else if (body.error === 'rate_limited') {
+          // Rate limited — skip payment this iteration; no-payment path below
+          console.log('Faucet rate_limited — skipping payment this iteration');
+          faucetOkRate.add(false);
+        } else if (body.success === true && body.tx_hash) {
+          txHash = body.tx_hash;
+          faucetOkRate.add(true);
+        } else {
+          console.warn(`Unexpected faucet response: ${drip.body}`);
+          faucetOkRate.add(false);
+        }
+      }
+
+      // ── Step 2: POST /shorten ─────────────────────────────────────────────────
+      const shortenPayload = { url: `https://example.com/load-test-${Date.now()}` };
+      if (txHash) {
+        shortenPayload.tx_hash = txHash;
+      }
+
+      const shorten = http.post(
+        `${BASE_URL}/shorten`,
+        JSON.stringify(shortenPayload),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+
+      const shortenOk = check(shorten, {
+        'shorten status 201': (r) => r.status === 201,
+      });
+
+      paymentSuccessRate.add(shorten.status === 201);
+      payment402Rate.add(shorten.status === 402);
+      payment409Rate.add(shorten.status === 409);
+
+      if (shorten.status === 409) {
+        console.warn(`409 replay detected — tx_hash reuse? hash=${txHash}`);
+      }
+
+      // ── Step 3: GET /{code} (no redirect follow) ──────────────────────────────
+      if (shorten.status === 201) {
+        let code = '';
+        try {
+          code = JSON.parse(shorten.body).code || JSON.parse(shorten.body).short_code || '';
+        } catch (_) {}
+
+        if (code) {
+          const redirect = http.get(
+            `${BASE_URL}/${code}`,
+            { redirects: 0 },
+          );
+          const redirectOk = check(redirect, {
+            'redirect status 302': (r) => r.status === 302,
+          });
+          redirectOkRate.add(redirect.status === 302);
+        }
+      }
+
+      sleep(1);
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: loadgen
+  namespace: url-shortener-staging
+  annotations:
+    chaos-promotion/faucet-mode: "address-only — degrades to no-payment if signature_required"
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:latest
+          args: ['run', '--out', 'json=/tmp/results.json', '/scripts/loadgen.js']
+          env:
+            - name: BASE_URL
+              value: "http://url-shortener.url-shortener-staging.svc.cluster.local:80"
+            - name: FAUCET_URL
+              value: "https://testnet.radiustech.xyz/api/v1/faucet"
+            - name: PAYMENT_ENABLED
+              value: "true"
+            - name: VUS
+              value: "2"
+            - name: DURATION
+              value: "3m"
+            - name: SERVICE_WALLET_ADDRESS
+              valueFrom:
+                secretKeyRef:
+                  name: url-shortener-secrets  # ESO-managed, already exists in staging ns
+                  key: SERVICE_WALLET_ADDRESS
+          volumeMounts:
+            - name: k6-script
+              mountPath: /scripts
+      volumes:
+        - name: k6-script
+          configMap:
+            name: k6-loadgen-script
