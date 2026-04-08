@@ -73,6 +73,18 @@ loki:
     storage:
       type: filesystem
 
+    schemaConfig:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem    # filesystem is intentional — logs are ephemeral by design.
+          # purpose is chaos experiment correlation, not long-term retention.
+          # for persistence, swap to object_store: gcs + IAM bindings for Loki SA.
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+
     # Compactor must be enabled for retention_period to actually delete old logs
     compactor:
       retention_enabled: true
