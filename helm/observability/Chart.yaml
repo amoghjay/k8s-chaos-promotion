@@ -11,3 +11,6 @@ dependencies:
   - name: loki
     version: "6.29.0"   # pin with: helm search repo grafana/loki
     repository: https://grafana.github.io/helm-charts
+  - name: promtail
+    version: "6.16.6"   # pin with: helm search repo grafana/promtail
+    repository: https://grafana.github.io/helm-charts
