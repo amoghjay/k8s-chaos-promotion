@@ -4,7 +4,7 @@ metadata:
   name: url-shortener-dashboard
   namespace: {{ .Release.Namespace }}
   labels:
-    # Grafana sidecar picks up ConfigMaps with this label
+    # Grafana sidecar discovers ConfigMaps with this label (searchNamespace: ALL)
     grafana_dashboard: "1"
 data:
   url-shortener.json: |
@@ -14,6 +14,25 @@ data:
       "schemaVersion": 38,
       "refresh": "10s",
       "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "label": "Environment",
+            "type": "custom",
+            "query": "url-shortener-dev,url-shortener-staging,url-shortener-prod",
+            "current": { "text": "url-shortener-staging", "value": "url-shortener-staging" },
+            "options": [
+              { "text": "url-shortener-dev",     "value": "url-shortener-dev"     },
+              { "text": "url-shortener-staging",  "value": "url-shortener-staging"  },
+              { "text": "url-shortener-prod",     "value": "url-shortener-prod"     }
+            ],
+            "includeAll": false,
+            "multi": false,
+            "hide": 0
+          }
+        ]
+      },
       "panels": [
         {
           "id": 1,
@@ -22,22 +41,26 @@ data:
           "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
           "targets": [
             {
-              "expr": "sum(rate(http_requests_total{job=~\"url-shortener.*\"}[1m])) by (handler, method)",
-              "legendFormat": "{{ "{{handler}} {{method}}" }}"
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (handler, method)",
+              "legendFormat": "{{ "{{handler}} {{method}}" }}",
+              "refId": "A"
             }
-          ]
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
         },
         {
           "id": 2,
-          "title": "P99 Latency (ms)",
+          "title": "P99 Request Latency (ms)",
           "type": "timeseries",
           "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=~\"url-shortener.*\"}[1m])) by (le, handler)) * 1000",
-              "legendFormat": "{{ "{{handler}}" }} p99"
+              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le, handler)) * 1000",
+              "legendFormat": "{{ "{{handler}}" }} p99",
+              "refId": "A"
             }
-          ]
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms" } }
         },
         {
           "id": 3,
@@ -46,17 +69,26 @@ data:
           "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
           "targets": [
             {
-              "expr": "sum(rate(url_shortener_cache_hits_total[5m])) / (sum(rate(url_shortener_cache_hits_total[5m])) + sum(rate(url_shortener_cache_misses_total[5m])))",
-              "legendFormat": "hit rate"
+              "expr": "sum(rate(url_shortener_cache_hits_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])) / (sum(rate(url_shortener_cache_hits_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])) + sum(rate(url_shortener_cache_misses_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])))",
+              "legendFormat": "hit rate",
+              "refId": "A"
             }
           ],
           "fieldConfig": {
-            "defaults": { "unit": "percentunit", "thresholds": { "steps": [
-              { "value": 0, "color": "red" },
-              { "value": 0.5, "color": "yellow" },
-              { "value": 0.8, "color": "green" }
-            ]}}
-          }
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null,  "color": "red"    },
+                  { "value": 0.5,   "color": "yellow" },
+                  { "value": 0.8,   "color": "green"  }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
           "id": 4,
@@ -65,46 +97,117 @@ data:
           "gridPos": { "x": 6, "y": 8, "w": 6, "h": 4 },
           "targets": [
             {
-              "expr": "sum(url_shortener_urls_created_total)",
-              "legendFormat": "total"
+              "expr": "sum(url_shortener_urls_created_total{job=\"url-shortener\", namespace=\"$namespace\"})",
+              "legendFormat": "total",
+              "refId": "A"
             }
-          ]
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
           "id": 5,
-          "title": "Payment Verifications",
-          "type": "timeseries",
-          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "title": "HTTP 402 Rate (payment required/s)",
+          "type": "stat",
+          "gridPos": { "x": 12, "y": 8, "w": 6, "h": 4 },
           "targets": [
             {
-              "expr": "sum(rate(payment_verifications_total[1m])) by (status)",
-              "legendFormat": "{{ "{{status}}" }}"
+              "expr": "sum(rate(payment_402_responses_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m]))",
+              "legendFormat": "402/s",
+              "refId": "A"
             }
-          ]
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
           "id": 6,
-          "title": "Payment Verification Duration (p99)",
-          "type": "timeseries",
-          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "title": "Payment Replay Attempts",
+          "type": "stat",
+          "gridPos": { "x": 18, "y": 8, "w": 6, "h": 4 },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket[1m])) by (le)) * 1000",
-              "legendFormat": "p99 ms"
+              "expr": "sum(payment_replay_attempts_total{job=\"url-shortener\", namespace=\"$namespace\"})",
+              "legendFormat": "replays",
+              "refId": "A"
             }
-          ]
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "green" },
+                  { "value": 1,    "color": "red"   }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
           "id": 7,
-          "title": "Error Rate",
+          "title": "Payment Verifications by Status",
           "type": "timeseries",
-          "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
           "targets": [
             {
-              "expr": "sum(rate(http_requests_total{job=~\"url-shortener.*\", status=~\"5..\"}[1m])) by (handler)",
-              "legendFormat": "{{ "{{handler}}" }} errors"
+              "expr": "sum(rate(payment_verifications_total{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (status)",
+              "legendFormat": "{{ "{{status}}" }}",
+              "refId": "A"
             }
-          ]
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "id": 8,
+          "title": "Payment Verification Duration p99 (ms)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "p99 ms",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms" } }
+        },
+        {
+          "id": 9,
+          "title": "Error Rate (5xx)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=~\"5..\"}[1m])) by (handler)",
+              "legendFormat": "{{ "{{handler}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "red" } } }
+        },
+        {
+          "id": 10,
+          "title": "Money Shot: HTTP Latency vs Payment Verification Latency",
+          "description": "The chaos impact panel. During pod kills or network injection, watch both lines spike together. HTTP p99 reflects end-user experience; payment p99 reflects Radius RPC health.",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "HTTP p99",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "Payment verification p99",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms" } }
         }
       ]
     }

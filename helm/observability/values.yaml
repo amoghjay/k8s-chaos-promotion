@@ -5,48 +5,65 @@ appNamespaces:
   - url-shortener-prod
 
 kube-prometheus-stack:
-  # Grafana admin password — sourced from K8s secret created by ESO in Phase 4
-  # Secret name: grafana-admin-secret, key: password
   grafana:
-    adminPassword: ""  # Leave empty; use existing secret below
+    # Admin password from ESO-managed secret (grafana-admin-secret in monitoring ns)
+    # Created by kubernetes/bootstrap/secrets/external-secrets-monitoring.yaml
     admin:
       existingSecret: grafana-admin-secret
       userKey: username
       passwordKey: password
 
-    # Loki datasource wired in automatically
+    # Loki wired as additional datasource
+    # Service name = <release-name>-loki = observability-loki (ArgoCD uses app name as release name)
     additionalDataSources:
       - name: Loki
         type: loki
-        url: http://{{ .Release.Name }}-loki:3100
+        url: http://observability-loki:3100
         access: proxy
         isDefault: false
 
+    # Sidecar picks up dashboard ConfigMaps labelled grafana_dashboard=1 from any namespace
     sidecar:
       dashboards:
         enabled: true
         label: grafana_dashboard
         labelValue: "1"
-        searchNamespace: ALL  # pick up dashboard ConfigMaps from any namespace
+        searchNamespace: ALL
 
-  # ServiceMonitor label selector — must match release label set on this chart
   prometheus:
     prometheusSpec:
+      # Retain 7 days of metrics — survives node scale-to-zero sessions
+      retention: 7d
+
+      # PVC-backed storage — without this, emptyDir is used and metrics are lost on node drain
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: standard
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 10Gi
+
+      # Watch ServiceMonitors labelled release=observability across all namespaces
       serviceMonitorSelector:
         matchLabels:
           release: observability
-      serviceMonitorNamespaceSelector: {}  # watch all namespaces
+      serviceMonitorNamespaceSelector: {}
 
-  # Alertmanager not needed yet — simplifies setup
   alertmanager:
     enabled: false
 
-  # Disable node-exporter on spot/chaos nodes to avoid scheduling issues
   nodeExporter:
     enabled: true
 
+promtail:
+  # DaemonSet — runs on every node, reads pod logs from /var/log/pods and ships to Loki
+  config:
+    clients:
+      - url: http://observability-loki:3100/loki/api/v1/push
+
 loki:
-  # Single-binary mode — simplest for a project-scale deployment
   deploymentMode: SingleBinary
 
   loki:
@@ -55,8 +72,13 @@ loki:
       replication_factor: 1
     storage:
       type: filesystem
+
+    # Compactor must be enabled for retention_period to actually delete old logs
+    compactor:
+      retention_enabled: true
+
     limits_config:
-      retention_period: 48h  # Keep 2 days of logs; enough for chaos demo
+      retention_period: 48h
 
   singleBinary:
     replicas: 1
