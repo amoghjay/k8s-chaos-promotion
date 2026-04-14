@@ -10,7 +10,7 @@ const redirectOkRate     = new Rate('redirect_ok_rate');
 const faucetOkRate       = new Rate('faucet_ok_rate');
 
 // ── ENV vars ──────────────────────────────────────────────────────────────────
-const BASE_URL               = __ENV.BASE_URL    || 'http://url-shortener.url-shortener-staging.svc.cluster.local:80';
+const BASE_URL               = __ENV.BASE_URL    || 'http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80';
 const FAUCET_URL             = __ENV.FAUCET_URL  || 'https://testnet.radiustech.xyz/api/v1/faucet';
 const SERVICE_WALLET_ADDRESS = __ENV.SERVICE_WALLET_ADDRESS; // required — from k8s secret
 const PAYMENT_ENABLED        = (__ENV.PAYMENT_ENABLED || 'true') === 'true';
@@ -87,7 +87,7 @@ export default function () {
     { headers: { 'Content-Type': 'application/json' } },
   );
 
-  const shortenOk = check(shorten, {
+  check(shorten, {
     'shorten status 201': (r) => r.status === 201,
   });
 
@@ -111,7 +111,7 @@ export default function () {
         `${BASE_URL}/${code}`,
         { redirects: 0 },
       );
-      const redirectOk = check(redirect, {
+      check(redirect, {
         'redirect status 302': (r) => r.status === 302,
       });
       redirectOkRate.add(redirect.status === 302);

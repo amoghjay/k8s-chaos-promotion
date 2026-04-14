@@ -17,7 +17,7 @@ data:
     const faucetOkRate       = new Rate('faucet_ok_rate');
 
     // ── ENV vars ──────────────────────────────────────────────────────────────────
-    const BASE_URL               = __ENV.BASE_URL    || 'http://url-shortener.url-shortener-staging.svc.cluster.local:80';
+    const BASE_URL               = __ENV.BASE_URL    || 'http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80';
     const FAUCET_URL             = __ENV.FAUCET_URL  || 'https://testnet.radiustech.xyz/api/v1/faucet';
     const SERVICE_WALLET_ADDRESS = __ENV.SERVICE_WALLET_ADDRESS; // required — from k8s secret
     const PAYMENT_ENABLED        = (__ENV.PAYMENT_ENABLED || 'true') === 'true';
@@ -146,7 +146,7 @@ spec:
           args: ['run', '--out', 'json=/tmp/results.json', '/scripts/loadgen.js']
           env:
             - name: BASE_URL
-              value: "http://url-shortener.url-shortener-staging.svc.cluster.local:80"
+              value: "http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80"
             - name: FAUCET_URL
               value: "https://testnet.radiustech.xyz/api/v1/faucet"
             - name: PAYMENT_ENABLED
@@ -158,7 +158,7 @@ spec:
             - name: SERVICE_WALLET_ADDRESS
               valueFrom:
                 secretKeyRef:
-                  name: url-shortener-secrets  # ESO-managed, already exists in staging ns
+                  name: url-shortener-staging-secret  # ESO-managed
                   key: SERVICE_WALLET_ADDRESS
           volumeMounts:
             - name: k6-script
