@@ -1,5 +1,5 @@
 image:
-  tag: "latest"  # managed by Kargo — do not edit manually
+  tag: sha-67b9f8f
 
 replicaCount: 2
 
