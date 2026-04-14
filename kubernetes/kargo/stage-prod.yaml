@@ -19,11 +19,66 @@ spec:
           value: https://github.com/amoghjay/k8s-chaos-promotion.git
 
       steps:
-        - task:
-            name: promote-with-pr
-          vars:
-            - name: repoURL
-              value: ${{ vars.repoURL }}
+        # Step 1: Clone repo, check out main
+        - uses: git-clone
+          config:
+            repoURL: ${{ vars.repoURL }}
+            checkout:
+              - branch: main
+                path: ./src
+
+        # Step 2: Update image.tag in the env values file
+        - uses: yaml-update
+          as: update-image
+          config:
+            path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
+            updates:
+              - key: image.tag
+                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+
+        # Step 3: Update deployedCommit in config file
+        - uses: yaml-update
+          config:
+            path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
+            updates:
+              - key: deployedCommit
+                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+
+        # Step 4: Commit both changed files
+        - uses: git-commit
+          config:
+            path: ./src
+            message: "chore(${{ ctx.stage }}): promote to ${{ imageFrom('us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener').Tag }}"
+
+        # Step 5: Push to a generated temp branch (not directly to main)
+        - uses: git-push
+          as: push
+          config:
+            path: ./src
+            generateTargetBranch: true
+
+        # Step 6: Open PR from temp branch → main
+        - uses: git-open-pr
+          as: open-pr
+          config:
+            repoURL: ${{ vars.repoURL }}
+            createTargetBranch: false
+            sourceBranch: ${{ outputs.push.branch }}
+            targetBranch: main
+
+        # Step 7: Wait for manual PR merge — prod is a human gate
+        - uses: git-wait-for-pr
+          config:
+            repoURL: ${{ vars.repoURL }}
+            prNumber: ${{ outputs['open-pr'].pr.id }}
+
+        # Step 8: Trigger immediate ArgoCD sync after PR merges
+        - uses: argocd-update
+          config:
+            apps:
+              - name: url-shortener-${{ ctx.stage }}
+                sources:
+                  - repoURL: ${{ vars.repoURL }}
 
   # No verification — prod is a manual gate only
   # Approval happens in Kargo UI before promotion even starts

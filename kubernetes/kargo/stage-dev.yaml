@@ -18,11 +18,50 @@ spec:
           value: https://github.com/amoghjay/k8s-chaos-promotion.git
 
       steps:
-        - task:
-            name: promote-dev  # references our PromotionTask
-          vars:
-            - name: repoURL
-              value: ${{ vars.repoURL }}
+        # Step 1: Clone repo, check out main
+        - uses: git-clone
+          config:
+            repoURL: ${{ vars.repoURL }}
+            checkout:
+              - branch: main
+                path: ./src
+
+        # Step 2: Update image.tag in the env values file
+        - uses: yaml-update
+          as: update-image
+          config:
+            path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
+            updates:
+              - key: image.tag
+                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+
+        # Step 3: Update deployedCommit in config file
+        - uses: yaml-update
+          config:
+            path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
+            updates:
+              - key: deployedCommit
+                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+
+        # Step 4: Commit both changed files
+        - uses: git-commit
+          config:
+            path: ./src
+            message: "chore(dev): promote to ${{ imageFrom('us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener').Tag }}"
+
+        # Step 5: Push directly to main
+        - uses: git-push
+          config:
+            path: ./src
+            targetBranch: main
+
+        # Step 6: Trigger immediate ArgoCD sync
+        - uses: argocd-update
+          config:
+            apps:
+              - name: url-shortener-${{ ctx.stage }}
+                sources:
+                  - repoURL: ${{ vars.repoURL }}
 
   # After promotion, verify the app is healthy before marking freight as verified
   # Staging will only receive freight that passed this check
