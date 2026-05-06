@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-tps-bench-script
+  namespace: url-shortener-staging
+data:
+  radius-tps-bench.js: |
+    import { Client } from 'k6/x/ethereum';
+    import { Trend, Counter } from 'k6/metrics';
+
+    const confirmLatency = new Trend('radius_confirm_ms', true);
+    const txTotal        = new Counter('radius_tx_total');
+
+    const RPC_URL        = __ENV.RPC_URL             || 'https://rpc.testnet.radiustech.xyz';
+    const CHAIN_ID       = parseInt(__ENV.CHAIN_ID   || '72344');
+    const SERVICE_WALLET = __ENV.SERVICE_WALLET_ADDRESS;
+    const WALLET_KEY     = __ENV.WALLET_KEY_1;
+    const SBC_CONTRACT   = '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb';
+    const SBC_AMOUNT     = 1000;
+    const TX_COUNT       = parseInt(__ENV.TX_COUNT || '100');
+
+    export const options = {
+      vus:        1,
+      iterations: 1,
+    };
+
+    if (!WALLET_KEY) {
+      throw new Error('WALLET_KEY_1 is not set');
+    }
+
+    const client = new Client({
+      url:        RPC_URL,
+      privateKey: WALLET_KEY,
+      chainID:    CHAIN_ID,
+    });
+
+    function encodeERC20Transfer(to, amount) {
+      const selector  = 'a9059cbb';
+      const paddedTo  = to.replace('0x', '').toLowerCase().padStart(64, '0');
+      const paddedAmt = parseInt(amount).toString(16).padStart(64, '0');
+      return '0x' + selector + paddedTo + paddedAmt;
+    }
+
+    export default function () {
+      if (!SERVICE_WALLET) {
+        console.error('SERVICE_WALLET_ADDRESS is required');
+        return;
+      }
+
+      const data       = encodeERC20Transfer(SERVICE_WALLET, SBC_AMOUNT);
+      const benchStart = Date.now();
+
+      console.log(`Starting Radius TPS benchmark: ${TX_COUNT} transactions`);
+      console.log(`RPC: ${RPC_URL}  Chain: ${CHAIN_ID}`);
+
+      for (let i = 0; i < TX_COUNT; i++) {
+        const txStart = Date.now();
+        let txHash;
+        try {
+          txHash = client.sendRawTransaction({
+            to:   SBC_CONTRACT,
+            gas:  100000,
+            data: data,
+          });
+          client.waitForTransactionReceipt(txHash, 30);
+        } catch (e) {
+          console.error(`tx ${i + 1} failed: ${e}`);
+          continue;
+        }
+
+        const latency = Date.now() - txStart;
+        confirmLatency.add(latency);
+        txTotal.add(1);
+
+        if ((i + 1) % 10 === 0) {
+          console.log(`  ${i + 1}/${TX_COUNT} confirmed — this tx: ${latency}ms`);
+        }
+      }
+
+      const totalMs = Date.now() - benchStart;
+      const tpm     = Math.round((TX_COUNT / totalMs) * 60000);
+
+      console.log(`\n=== Radius TPS Benchmark Results ===`);
+      console.log(`Total txs  : ${TX_COUNT}`);
+      console.log(`Total time : ${(totalMs / 1000).toFixed(1)}s`);
+      console.log(`Throughput : ~${tpm} tx/min`);
+      console.log(`See Grafana → radius_confirm_ms for p50/p95/p99 latency`);
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: radius-tps-bench
+  namespace: url-shortener-staging
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum:latest
+          args: ['run', '/scripts/radius-tps-bench.js']
+          env:
+            - name: CHAIN_ID
+              value: "72344"
+            - name: TX_COUNT
+              value: "100"
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: url-shortener-staging-secret
+                  key: RADIUS_RPC_URL
+            - name: SERVICE_WALLET_ADDRESS
+              valueFrom:
+                secretKeyRef:
+                  name: url-shortener-staging-secret
+                  key: SERVICE_WALLET_ADDRESS
+            - name: WALLET_KEY_1
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-wallet-secret
+                  key: WALLET_KEY_1
+          volumeMounts:
+            - name: k6-script
+              mountPath: /scripts
+      volumes:
+        - name: k6-script
+          configMap:
+            name: k6-tps-bench-script
