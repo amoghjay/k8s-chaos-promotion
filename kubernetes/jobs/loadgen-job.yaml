@@ -1,117 +1,5 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: k6-loadgen-script
-  namespace: url-shortener-staging
-data:
-  loadgen.js: |
-    import { Client } from 'k6/x/ethereum';
-    import http from 'k6/http';
-    import { check, sleep } from 'k6';
-    import { Rate } from 'k6/metrics';
-
-    const paymentSuccessRate = new Rate('payment_success_rate');
-    const payment402Rate     = new Rate('payment_402_rate');
-    const payment409Rate     = new Rate('payment_409_rate');
-    const redirectOkRate     = new Rate('redirect_ok_rate');
-
-    const BASE_URL          = __ENV.BASE_URL    || 'http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80';
-    const RPC_URL           = __ENV.RPC_URL     || 'https://rpc.testnet.radiustech.xyz';
-    const CHAIN_ID          = parseInt(__ENV.CHAIN_ID || '72344');
-    const SERVICE_WALLET    = __ENV.SERVICE_WALLET_ADDRESS;
-    const SBC_CONTRACT      = '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb';
-    const SBC_AMOUNT        = 1000;
-    const PAYMENT_ENABLED   = (__ENV.PAYMENT_ENABLED || 'true') === 'true';
-
-    const WALLET_KEYS = [
-      __ENV.WALLET_KEY_1,
-      __ENV.WALLET_KEY_2,
-      __ENV.WALLET_KEY_3,
-    ];
-
-    export const options = {
-      vus:      parseInt(__ENV.VUS || '3'),
-      duration: __ENV.DURATION     || '5m',
-      thresholds: {
-        http_req_duration:    ['p(95)<500'],
-        http_req_failed:      ['rate<0.05'],
-        payment_success_rate: ['rate>0.95'],
-      },
-    };
-
-    let client = null;
-    if (PAYMENT_ENABLED) {
-      const myKey = WALLET_KEYS[__VU - 1];
-      if (!myKey) {
-        throw new Error(`WALLET_KEY_${__VU} is not set — fund one wallet per VU`);
-      }
-      client = new Client({
-        url:        RPC_URL,
-        privateKey: myKey,
-        chainID:    CHAIN_ID,
-      });
-    }
-
-    function encodeERC20Transfer(to, amount) {
-      const selector  = 'a9059cbb';
-      const paddedTo  = to.replace('0x', '').toLowerCase().padStart(64, '0');
-      const paddedAmt = parseInt(amount).toString(16).padStart(64, '0');
-      return '0x' + selector + paddedTo + paddedAmt;
-    }
-
-    export default function () {
-      if (!SERVICE_WALLET) {
-        console.error('SERVICE_WALLET_ADDRESS is required');
-        return;
-      }
-
-      let txHash = null;
-      if (PAYMENT_ENABLED) {
-        try {
-          txHash = client.sendRawTransaction({
-            to:   SBC_CONTRACT,
-            gas:  100000,
-            data: encodeERC20Transfer(SERVICE_WALLET, SBC_AMOUNT),
-          });
-          client.waitForTransactionReceipt(txHash, 30);
-        } catch (e) {
-          console.error(`VU${__VU} tx failed: ${e}`);
-          paymentSuccessRate.add(false);
-          return;
-        }
-      }
-
-      const payload = { url: `https://example.com/load-test-${__VU}-${Date.now()}` };
-      if (txHash) payload.tx_hash = txHash;
-
-      const shorten = http.post(
-        `${BASE_URL}/shorten`,
-        JSON.stringify(payload),
-        { headers: { 'Content-Type': 'application/json' } },
-      );
-
-      check(shorten, { 'shorten 201': (r) => r.status === 201 });
-      paymentSuccessRate.add(shorten.status === 201);
-      payment402Rate.add(shorten.status === 402);
-      payment409Rate.add(shorten.status === 409);
-
-      if (shorten.status === 409) {
-        console.warn(`VU${__VU} 409 replay — unexpected tx_hash reuse: ${txHash}`);
-      }
-
-      if (shorten.status === 201) {
-        let code = '';
-        try { code = JSON.parse(shorten.body).code || JSON.parse(shorten.body).short_code || ''; } catch (_) {}
-        if (code) {
-          const redirect = http.get(`${BASE_URL}/${code}`, { redirects: 0 });
-          check(redirect, { 'redirect 302': (r) => r.status === 302 });
-          redirectOkRate.add(redirect.status === 302);
-        }
-      }
-
-      sleep(2);
-    }
----
+# Render the ConfigMap from scripts/loadgen.js with:
+# ./kubernetes/jobs/render-loadgen-manifest.sh | kubectl apply -f -
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -119,13 +7,16 @@ metadata:
   namespace: url-shortener-staging
 spec:
   backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
   template:
     spec:
       restartPolicy: Never
       containers:
         - name: k6
-          image: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum:latest
-          args: ['run', '--out', 'json=/tmp/results.json', '/scripts/loadgen.js']
+          image: __LOADGEN_IMAGE__
+          imagePullPolicy: IfNotPresent
+          args: ['run', '/scripts/loadgen.js']
           env:
             - name: BASE_URL
               value: "http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80"
@@ -133,10 +24,26 @@ spec:
               value: "true"
             - name: VUS
               value: "3"
+            - name: LOAD_PROFILE
+              value: "arrival-rate"
+            - name: ARRIVAL_RATE
+              value: "60"
+            - name: ARRIVAL_TIME_UNIT
+              value: "1m"
             - name: DURATION
               value: "5m"
             - name: CHAIN_ID
               value: "72344"
+            - name: SBC_CONTRACT_ADDRESS
+              value: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
+            - name: SBC_AMOUNT
+              value: "1000"
+            - name: TX_GAS_LIMIT
+              value: "100000"
+            - name: RECEIPT_TIMEOUT_S
+              value: "30"
+            - name: PRECHECK_TIMEOUT
+              value: "5s"
             - name: RPC_URL
               valueFrom:
                 secretKeyRef:
@@ -162,6 +69,13 @@ spec:
                 secretKeyRef:
                   name: loadgen-wallet-secret
                   key: WALLET_KEY_3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
           volumeMounts:
             - name: k6-script
               mountPath: /scripts
