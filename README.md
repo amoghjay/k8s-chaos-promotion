@@ -117,11 +117,13 @@ helm/
 kubernetes/
   bootstrap/                ArgoCD App-of-Apps (platform tools)
   kargo/                    Kargo Stages, Warehouse, AnalysisTemplates
-  jobs/                     k6 load generator Job + ConfigMap
+  jobs/                     Kustomize package for k6 jobs (loadgen + TPS benchmark)
 scripts/
   fund-test-wallet.sh       Faucet utility — drip SBC, verify on-chain balance
-  loadgen.js                k6 load generator source
   test-payment-flow.sh      Manual end-to-end payment verification
+kubernetes/jobs/scripts/
+  loadgen.js                k6 chaos load generator source
+  radius-tps-bench.js       k6 Radius TPS benchmark source
 .github/workflows/
   build-push.yaml           CI — build → sign → push to GAR (keyless OIDC)
 ```
@@ -147,9 +149,9 @@ This project uses Radius testnet as the payment settlement layer. Every `POST /s
 
 - **Null receipt lag** — `eth_getTransactionReceipt` returns null for confirmed transactions due to RPC node lag. Added a 200ms retry before surfacing `TX_NOT_FOUND` to the user.
 - **`cast call` output format** — `balanceOf` returns `"500000 [5e5]"` — decimal, not hex. Parsed with `awk '{print $1}'`, never `int(..., 16)`.
-- **Faucet rate limit** — 60 req/60s per address. The k6 load generator at VUS=2 approaches this limit (~44 req/min). Handled gracefully — VUs fall back to no-payment mode and `payment_402_rate` spikes in Grafana as a measurable signal.
+- **Faucet rate limit** — this was the Phase 5 bottleneck for the old `/drip`-based loadgen. Phase 5.5 moves to wallet-signed ERC-20 transfers with a custom `k6-ethereum` image so the chaos load generator measures the real payment path instead of faucet policy.
 - **`signature_required` degradation** — If the faucet re-enables signed mode, the bash faucet script exits cleanly with the web faucet URL. k6 VUs flip to no-payment mode permanently for that run. No private key for `SERVICE_WALLET` is ever stored in scripts.
-- **Address-only faucet flow** — The load generator calls `POST /drip` with `SERVICE_WALLET_ADDRESS` and uses the returned `tx_hash` directly as payment. No Ethereum signing required — the faucet sends SBC *to* the service wallet, so `verify_payment()` accepts it as a valid Transfer.
+- **Wallet-signed loadgen** — The current Phase 5.5 load generator uses one funded wallet per VU, signs real SBC ERC-20 transfers on Radius testnet, waits for confirmation, then submits the resulting `tx_hash` to `/shorten`.
 
 **Phase 5 baseline — real traffic against Radius testnet:**
 

@@ -54,45 +54,60 @@ k6 load generator for continuous payment traffic. Designed to run as a Kubernete
 inside `url-shortener-staging` so it's subject to the same Chaos Mesh network experiments
 as the app.
 
-**Address-only faucet flow**: calls `POST /drip` with `SERVICE_WALLET_ADDRESS` and uses the
-returned `tx_hash` directly as payment — no Ethereum signing needed.
+**Wallet-signed flow**: each VU uses its own funded wallet key, submits a real SBC ERC-20
+transfer on Radius testnet, waits for confirmation, then uses the resulting `tx_hash`
+as payment.
 
 Per-VU iteration:
-1. `POST /drip` → get `tx_hash`  (falls back to no-payment mode on `signature_required` or `rate_limited`)
+1. Submit SBC ERC-20 transfer → get `tx_hash`
 2. `POST /shorten` with `tx_hash` → expect 201
 3. `GET /{code}` with `redirects: 0` → expect 302
 
 Custom metrics tracked:
 | Metric | Description |
 |--------|-------------|
-| `payment_success_rate` | Rate of 201 on /shorten |
-| `payment_402_rate` | Rate of 402 (faucet skipped or payment disabled) |
-| `payment_409_rate` | Rate of 409 (replay — should be 0) |
+| `tx_submit_success_rate` | Rate of successful on-chain transaction submission |
+| `tx_receipt_success_rate` | Rate of successful transaction confirmation receipt fetches |
+| `tx_confirmation_ms` | End-to-end time from submit to confirmed receipt |
+| `shorten_201_rate` | Rate of 201 on /shorten |
+| `shorten_402_rate` | Rate of 402 on /shorten |
+| `shorten_409_rate` | Rate of 409 (replay — should be 0) |
+| `shorten_5xx_rate` | Rate of 5xx responses on /shorten |
 | `redirect_ok_rate` | Rate of 302 on /{code} |
-| `faucet_ok_rate` | Rate of successful faucet drips |
 
-Phase 5 thresholds (baseline):
+Current thresholds:
 - `http_req_duration p(95) < 500ms`
 - `http_req_failed rate < 0.05`
-- `payment_success_rate rate > 0.95`
+- `shorten_201_rate rate > 0.95`
+- `redirect_ok_rate rate > 0.95`
+- `tx_submit_success_rate rate > 0.95` when `PAYMENT_ENABLED=true`
+- `tx_receipt_success_rate rate > 0.95` when `PAYMENT_ENABLED=true`
 
-Run locally (requires k6):
+Canonical k6 job scripts now live under `kubernetes/jobs/scripts/`.
+
+Run locally with the custom k6 binary:
 ```bash
-SERVICE_WALLET=$(kubectl get secret url-shortener-secrets -n url-shortener-staging \
+SERVICE_WALLET=$(kubectl get secret url-shortener-staging-secret -n url-shortener-staging \
   -o jsonpath='{.data.SERVICE_WALLET_ADDRESS}' | base64 -d)
 
 BASE_URL=http://localhost:8000 \
+RPC_URL=https://rpc.testnet.radiustech.xyz \
 SERVICE_WALLET_ADDRESS="$SERVICE_WALLET" \
-VUS=2 DURATION=1m \
-k6 run scripts/loadgen.js
+WALLET_KEY_1=... \
+WALLET_KEY_2=... \
+WALLET_KEY_3=... \
+VUS=3 DURATION=1m \
+k6 run kubernetes/jobs/scripts/loadgen.js
 ```
 
 Run as k8s Job (Phase 5+):
 ```bash
-kubectl apply -f kubernetes/jobs/loadgen-job.yaml
+kubectl apply -k kubernetes/jobs
 kubectl logs -f job/loadgen -n url-shortener-staging
 ```
 
-Rate limit note: VUS=2 at ~3s/iteration ≈ 40 req/min — within the 60 req/60s faucet limit.
-VUS=5 pushes ~100 req/min; some VUs will hit `rate_limited` and fall back to no-payment mode
-(expected, measured via `payment_402_rate` in Grafana).
+ArgoCD / Kustomize notes:
+- `kubernetes/jobs/kustomization.yaml` is the source ArgoCD should point at.
+- `kubernetes/jobs/scripts/loadgen.js` and `kubernetes/jobs/scripts/radius-tps-bench.js` are the canonical script sources.
+- Kustomize generates the `ConfigMap`s from those files automatically.
+- Update the `images:` section in `kustomization.yaml` to an immutable `sha-<short>` tag or digest once the custom `k6-ethereum` image is pushed.

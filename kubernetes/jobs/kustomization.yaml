@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: url-shortener-staging
+
+resources:
+  - external-secret-loadgen.yaml
+  - loadgen-job.yaml
+  - radius-tps-bench-job.yaml
+
+configMapGenerator:
+  - name: k6-loadgen-script
+    files:
+      - loadgen.js=scripts/loadgen.js
+  - name: k6-tps-bench-script
+    files:
+      - radius-tps-bench.js=scripts/radius-tps-bench.js
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  # Updated automatically by .github/workflows/build-k6-ethereum.yaml on main.
+  # CI publishes both :latest and :sha-<short>, then pins this Kustomize package
+  # to the immutable sha tag for reproducible ArgoCD syncs.
+  - name: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum
+    newTag: latest
