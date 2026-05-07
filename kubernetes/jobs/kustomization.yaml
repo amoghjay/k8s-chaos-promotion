@@ -24,4 +24,4 @@ images:
   # CI publishes both :latest and :sha-<short>, then pins this Kustomize package
   # to the immutable sha tag for reproducible ArgoCD syncs.
   - name: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum
-    newTag: latest
+    newTag: sha-7f73283
