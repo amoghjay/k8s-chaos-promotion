@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chaos-jobs
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/amoghjay/k8s-chaos-promotion.git
+    targetRevision: main
+    path: kubernetes/jobs
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: url-shortener-staging
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true

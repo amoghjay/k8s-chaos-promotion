@@ -83,6 +83,8 @@ Current thresholds:
 - `tx_submit_success_rate rate > 0.95` when `PAYMENT_ENABLED=true`
 - `tx_receipt_success_rate rate > 0.95` when `PAYMENT_ENABLED=true`
 
+Canonical k6 job scripts now live under `kubernetes/jobs/scripts/`.
+
 Run locally with the custom k6 binary:
 ```bash
 SERVICE_WALLET=$(kubectl get secret url-shortener-staging-secret -n url-shortener-staging \
@@ -95,12 +97,17 @@ WALLET_KEY_1=... \
 WALLET_KEY_2=... \
 WALLET_KEY_3=... \
 VUS=3 DURATION=1m \
-k6 run scripts/loadgen.js
+k6 run kubernetes/jobs/scripts/loadgen.js
 ```
 
 Run as k8s Job (Phase 5+):
 ```bash
-LOADGEN_IMAGE=us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum:sha-<short> \
-  ./kubernetes/jobs/render-loadgen-manifest.sh | kubectl apply -f -
+kubectl apply -k kubernetes/jobs
 kubectl logs -f job/loadgen -n url-shortener-staging
 ```
+
+ArgoCD / Kustomize notes:
+- `kubernetes/jobs/kustomization.yaml` is the source ArgoCD should point at.
+- `kubernetes/jobs/scripts/loadgen.js` and `kubernetes/jobs/scripts/radius-tps-bench.js` are the canonical script sources.
+- Kustomize generates the `ConfigMap`s from those files automatically.
+- Update the `images:` section in `kustomization.yaml` to an immutable `sha-<short>` tag or digest once the custom `k6-ethereum` image is pushed.

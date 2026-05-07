@@ -1,10 +1,10 @@
-# Render the ConfigMap from scripts/loadgen.js with:
-# ./kubernetes/jobs/render-loadgen-manifest.sh | kubectl apply -f -
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: loadgen
   namespace: url-shortener-staging
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 600
@@ -14,7 +14,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: k6
-          image: __LOADGEN_IMAGE__
+          image: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum:latest
           imagePullPolicy: IfNotPresent
           args: ['run', '/scripts/loadgen.js']
           env:

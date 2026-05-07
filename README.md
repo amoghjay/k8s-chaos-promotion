@@ -117,11 +117,13 @@ helm/
 kubernetes/
   bootstrap/                ArgoCD App-of-Apps (platform tools)
   kargo/                    Kargo Stages, Warehouse, AnalysisTemplates
-  jobs/                     k6 load generator Job + manifest render helper
+  jobs/                     Kustomize package for k6 jobs (loadgen + TPS benchmark)
 scripts/
   fund-test-wallet.sh       Faucet utility — drip SBC, verify on-chain balance
-  loadgen.js                k6 load generator source
   test-payment-flow.sh      Manual end-to-end payment verification
+kubernetes/jobs/scripts/
+  loadgen.js                k6 chaos load generator source
+  radius-tps-bench.js       k6 Radius TPS benchmark source
 .github/workflows/
   build-push.yaml           CI — build → sign → push to GAR (keyless OIDC)
 ```
