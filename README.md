@@ -150,9 +150,10 @@ This project uses Radius testnet as the payment settlement layer. Every `POST /s
 
 - **Null receipt lag** — `eth_getTransactionReceipt` returns null for confirmed transactions due to RPC node lag. Added a 200ms retry before surfacing `TX_NOT_FOUND` to the user.
 - **`cast call` output format** — `balanceOf` returns `"500000 [5e5]"` — decimal, not hex. Parsed with `awk '{print $1}'`, never `int(..., 16)`.
-- **Faucet rate limit** — this was the Phase 5 bottleneck for the old `/drip`-based loadgen. Phase 5.5 moves to wallet-signed ERC-20 transfers with a custom `k6-ethereum` image so the chaos load generator measures the real payment path instead of faucet policy.
+- **Faucet rate limit** — this was the Phase 5 bottleneck for the old `/drip`-based loadgen. Phase 5.5 moved the chaos path to signer-backed real ERC-20 transfers so the load generator measures the payment flow instead of faucet policy.
 - **`signature_required` degradation** — If the faucet re-enables signed mode, the bash faucet script exits cleanly with the web faucet URL. k6 VUs flip to no-payment mode permanently for that run. No private key for `SERVICE_WALLET` is ever stored in scripts.
 - **Signer-backed loadgen** — The current Phase 5.5 load generator uses one funded wallet per VU through an internal `radius-signer` service, submits real SBC ERC-20 transfers on Radius testnet, waits for confirmation, then submits the resulting `tx_hash` to `/shorten`.
+- **Current staging maturity** — The signer-backed path is now mostly healthy in staging: tx submit and receipt success are ~99.7%, shorten 201 success is ~94%, redirect success is 100%, and the main residual issue is verifier-side `tx_not_found` timing.
 
 **Phase 5 baseline — real traffic against Radius testnet:**
 
