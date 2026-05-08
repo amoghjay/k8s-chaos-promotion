@@ -175,7 +175,7 @@ export default function () {
         to:   SBC_CONTRACT,
         gas:  TX_GAS_LIMIT,
         chain_id: CHAIN_ID,
-        data: encodeERC20Transfer(SERVICE_WALLET, SBC_AMOUNT),
+        input: encodeERC20Transfer(SERVICE_WALLET, SBC_AMOUNT),
       });
       txSubmitSuccessRate.add(true);
     } catch (e) {

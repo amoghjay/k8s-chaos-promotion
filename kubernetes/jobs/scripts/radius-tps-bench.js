@@ -75,7 +75,7 @@ export default function () {
         to:   SBC_CONTRACT,
         gas:  100000,
         chain_id: CHAIN_ID,
-        data: data,
+        input: data,
       });
       client.waitForTransactionReceipt(txHash, 30);
     } catch (e) {
