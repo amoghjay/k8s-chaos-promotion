@@ -198,7 +198,8 @@ async def pay(request: PayRequest) -> PayResponse:
                     "from": slot.address,
                     "chainId": CHAIN_ID,
                     "gas": gas_limit,
-                    "type": "0x0",   # explicit legacy; avoids web3.py auto-injecting EIP-1559 fields
+                    # Omit `type` entirely for a legacy transaction. eth-account
+                    # rejects an explicit type 0, but legacy + gasPrice is valid.
                     "gasPrice": gas_price,
                     "nonce": nonce,
                 }
