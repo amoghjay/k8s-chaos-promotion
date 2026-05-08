@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -7,6 +8,7 @@ from eth_account import Account
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from web3 import HTTPProvider, Web3
+from web3.exceptions import ContractLogicError
 
 
 RPC_URL = os.getenv("RPC_URL", "").strip()
@@ -21,6 +23,9 @@ REQUEST_TIMEOUT_S = int(os.getenv("RPC_TIMEOUT_SECONDS", "10"))
 DEFAULT_SBC_AMOUNT = int(os.getenv("SBC_AMOUNT", "1000"))
 DEFAULT_GAS_LIMIT = int(os.getenv("TX_GAS_LIMIT", "100000"))
 
+logger = logging.getLogger("radius_signer")
+logging.basicConfig(level=logging.INFO)
+
 
 ERC20_ABI = [
     {
@@ -32,6 +37,13 @@ ERC20_ABI = [
             {"name": "value", "type": "uint256"},
         ],
         "outputs": [{"name": "", "type": "bool"}],
+    },
+    {
+        "type": "function",
+        "name": "balanceOf",
+        "stateMutability": "view",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
     }
 ]
 
@@ -49,6 +61,7 @@ class PayResponse(BaseModel):
     amount: int
     confirmation_ms: int
     block_number: int
+    sender_balance: int
 
 
 @dataclass
@@ -131,12 +144,41 @@ async def pay(request: PayRequest) -> PayResponse:
         started_at = time.time()
 
         try:
-            nonce = await asyncio.to_thread(web3.eth.get_transaction_count, slot.address, "pending")
-            gas_price = await asyncio.to_thread(lambda: web3.eth.gas_price)
-            transaction = token.functions.transfer(
+            sender_balance = await asyncio.to_thread(token.functions.balanceOf(slot.address).call)
+            if sender_balance < request.amount:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"wallet_index={slot.index} sender={slot.address} has insufficient SBC balance "
+                        f"{sender_balance} for amount={request.amount}"
+                    ),
+                )
+
+            transfer_fn = token.functions.transfer(
                 service_wallet_checksum,
                 request.amount,
-            ).build_transaction(
+            )
+            try:
+                await asyncio.to_thread(transfer_fn.call, {"from": slot.address})
+            except ContractLogicError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"preflight transfer reverted for wallet_index={slot.index} "
+                        f"sender={slot.address}: {exc}"
+                    ),
+                ) from exc
+            except Exception as exc:
+                logger.warning(
+                    "preflight transfer call failed wallet_index=%s sender=%s: %s",
+                    slot.index,
+                    slot.address,
+                    exc,
+                )
+
+            nonce = await asyncio.to_thread(web3.eth.get_transaction_count, slot.address, "pending")
+            gas_price = await asyncio.to_thread(lambda: web3.eth.gas_price)
+            transaction = transfer_fn.build_transaction(
                 {
                     "from": slot.address,
                     "chainId": CHAIN_ID,
@@ -154,10 +196,24 @@ async def pay(request: PayRequest) -> PayResponse:
                 0.2,
             )
         except Exception as exc:
+            logger.exception("payment submission failed wallet_index=%s sender=%s", slot.index, slot.address)
             raise HTTPException(status_code=502, detail=f"payment submission failed: {exc}") from exc
 
         if receipt.status != 1:
-            raise HTTPException(status_code=502, detail="payment transaction failed on-chain")
+            tx_hash = tx_hash_bytes.hex()
+            logger.error(
+                "payment transaction failed on-chain wallet_index=%s sender=%s tx_hash=%s",
+                slot.index,
+                slot.address,
+                tx_hash,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"payment transaction failed on-chain wallet_index={slot.index} "
+                    f"sender={slot.address} tx_hash={tx_hash}"
+                ),
+            )
 
         return PayResponse(
             tx_hash=tx_hash_bytes.hex(),
@@ -166,4 +222,5 @@ async def pay(request: PayRequest) -> PayResponse:
             amount=request.amount,
             confirmation_ms=int((time.time() - started_at) * 1000),
             block_number=receipt.blockNumber,
+            sender_balance=sender_balance,
         )
