@@ -9,7 +9,13 @@ spec:
   backoffLimit: 0
   activeDeadlineSeconds: 600
   ttlSecondsAfterFinished: 3600
+  selector:
+    matchLabels:
+      job-name: loadgen
   template:
+    metadata:
+      labels:
+        job-name: loadgen
     spec:
       restartPolicy: Never
       containers:

@@ -7,7 +7,13 @@ metadata:
     argocd.argoproj.io/sync-options: Replace=true
 spec:
   backoffLimit: 0
+  selector:
+    matchLabels:
+      job-name: radius-tps-bench
   template:
+    metadata:
+      labels:
+        job-name: radius-tps-bench
     spec:
       restartPolicy: Never
       containers:
