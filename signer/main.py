@@ -21,7 +21,10 @@ SBC_CONTRACT_ADDRESS = os.getenv(
 RECEIPT_TIMEOUT_S = int(os.getenv("RECEIPT_TIMEOUT_S", "30"))
 REQUEST_TIMEOUT_S = int(os.getenv("RPC_TIMEOUT_SECONDS", "10"))
 DEFAULT_SBC_AMOUNT = int(os.getenv("SBC_AMOUNT", "1000"))
-DEFAULT_GAS_LIMIT = int(os.getenv("TX_GAS_LIMIT", "100000"))
+DEFAULT_GAS_LIMIT = int(os.getenv("TX_GAS_LIMIT", "150000"))
+# Minimum SBC (raw units, 6 decimals) the Turnstile will deduct for gas when RUSD is low.
+# Radius docs: minimum conversion is 0.1 SBC = 100_000 raw units.
+TURNSTILE_MIN_SBC_UNITS = 100_000
 
 logger = logging.getLogger("radius_signer")
 logging.basicConfig(level=logging.INFO)
@@ -145,12 +148,18 @@ async def pay(request: PayRequest) -> PayResponse:
 
         try:
             sender_balance = await asyncio.to_thread(token.functions.balanceOf(slot.address).call)
-            if sender_balance < request.amount:
+            # Guard against Turnstile silently deducting SBC before EVM execution:
+            # eth_call passes when balance >= amount, but the real tx pre-deducts
+            # TURNSTILE_MIN_SBC_UNITS for gas conversion (0.1 SBC minimum per trigger).
+            rusd_balance = await asyncio.to_thread(web3.eth.get_balance, slot.address)
+            effective_minimum = request.amount + (TURNSTILE_MIN_SBC_UNITS if rusd_balance == 0 else 0)
+            if sender_balance < effective_minimum:
                 raise HTTPException(
                     status_code=400,
                     detail=(
                         f"wallet_index={slot.index} sender={slot.address} has insufficient SBC balance "
-                        f"{sender_balance} for amount={request.amount}"
+                        f"{sender_balance} (need {effective_minimum}: amount={request.amount} + "
+                        f"turnstile_reserve={effective_minimum - request.amount})"
                     ),
                 )
 
@@ -178,11 +187,18 @@ async def pay(request: PayRequest) -> PayResponse:
 
             nonce = await asyncio.to_thread(web3.eth.get_transaction_count, slot.address, "pending")
             gas_price = await asyncio.to_thread(lambda: web3.eth.gas_price)
+            gas_estimate = await asyncio.to_thread(
+                transfer_fn.estimate_gas, {"from": slot.address}
+            )
+            # 30% headroom; Radius average ERC-20 transfer is ~101k gas (docs).
+            # eth_call uses unlimited gas so a fixed cap below the average causes status=0.
+            gas_limit = max(request.gas_limit, int(gas_estimate * 1.3))
             transaction = transfer_fn.build_transaction(
                 {
                     "from": slot.address,
                     "chainId": CHAIN_ID,
-                    "gas": request.gas_limit,
+                    "gas": gas_limit,
+                    "type": "0x0",   # explicit legacy; avoids web3.py auto-injecting EIP-1559 fields
                     "gasPrice": gas_price,
                     "nonce": nonce,
                 }
