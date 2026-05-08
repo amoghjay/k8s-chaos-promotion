@@ -196,6 +196,12 @@ export default function () {
   shorten409Rate.add(shorten.status === 409);
   shorten5xxRate.add(shorten.status >= 500 && shorten.status < 600);
 
+  if (shorten.status !== 201) {
+    console.error(
+      `VU${__VU} shorten failed: status=${shorten.status} tx_hash=${txHash || 'none'} body=${shorten.body}`
+    );
+  }
+
   if (shorten.status === 409) {
     console.warn(`VU${__VU} 409 replay — unexpected tx_hash reuse: ${txHash}`);
   }

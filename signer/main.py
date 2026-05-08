@@ -217,7 +217,7 @@ async def pay(request: PayRequest) -> PayResponse:
             raise HTTPException(status_code=502, detail=f"payment submission failed: {exc}") from exc
 
         if receipt.status != 1:
-            tx_hash = tx_hash_bytes.hex()
+            tx_hash = Web3.to_hex(tx_hash_bytes)
             logger.error(
                 "payment transaction failed on-chain wallet_index=%s sender=%s tx_hash=%s",
                 slot.index,
@@ -233,7 +233,7 @@ async def pay(request: PayRequest) -> PayResponse:
             )
 
         return PayResponse(
-            tx_hash=tx_hash_bytes.hex(),
+            tx_hash=Web3.to_hex(tx_hash_bytes),
             wallet_index=slot.index,
             sender=slot.address,
             amount=request.amount,
