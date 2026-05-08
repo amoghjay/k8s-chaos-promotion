@@ -19,7 +19,7 @@ generatorOptions:
 images:
   # Updated automatically by .github/workflows/build-radius-signer.yaml on main.
   - name: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/radius-signer
-    newTag: sha-553bc95
+    newTag: sha-1eb3eed
   # Updated automatically by .github/workflows/build-k6-ethereum.yaml on main.
   # CI publishes both :latest and :sha-<short>, then pins this Kustomize package
   # to the immutable sha tag for reproducible ArgoCD syncs.
