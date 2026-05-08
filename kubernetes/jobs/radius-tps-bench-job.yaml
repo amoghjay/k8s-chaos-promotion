@@ -4,7 +4,7 @@ metadata:
   name: radius-tps-bench
   namespace: url-shortener-staging
   annotations:
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Force=true,Replace=true
 spec:
   backoffLimit: 0
   selector:
