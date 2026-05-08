@@ -1,26 +1,24 @@
-name: Build & Push k6-ethereum
+name: Build & Push radius-signer
 
 on:
   push:
     branches: [main]
-    paths: ["docker/k6-ethereum/**"]
+    paths: ["signer/**"]
   pull_request:
     branches: [main]
-    paths: ["docker/k6-ethereum/**"]
-  # Allow manual rebuild from GitHub UI — useful when pinning a new
-  # xk6-ethereum version in the Dockerfile without any other file changes.
+    paths: ["signer/**"]
   workflow_dispatch:
 
 env:
-  IMAGE: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum
+  IMAGE: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/radius-signer
 
 jobs:
-  build-k6-ethereum:
-    name: Build → Push k6-ethereum
+  build-radius-signer:
+    name: Build → Push radius-signer
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write   # required for WIF token exchange
+      id-token: write
 
     steps:
       - name: Checkout
@@ -33,7 +31,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Same WIF provider + SA as the app workflow — no extra IAM needed.
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
@@ -43,34 +40,31 @@ jobs:
       - name: Configure Docker for GAR
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      # Only linux/amd64 — the image runs inside GKE pods (amd64 nodes).
-      # Push only on main; PRs do a build-only check to catch Dockerfile errors early.
       - name: Build and push
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ./docker/k6-ethereum
-          file: ./docker/k6-ethereum/Dockerfile
+          context: ./signer
+          file: ./signer/Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:sha-${{ steps.vars.outputs.short_sha }}
-          # Layer cache in GAR — xk6 Go module downloads are cached between runs
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
 
-      - name: Pin jobs Kustomize image tag
+      - name: Pin signer image tag in jobs Kustomize
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           NEW_TAG: sha-${{ steps.vars.outputs.short_sha }}
         run: |
           sed -i.bak \
-            '/name: us-central1-docker.pkg.dev\/amoghdevops\/k8s-chaos-demo\/k6-ethereum/{n;s/newTag:.*/    newTag: '"${NEW_TAG}"'/;}' \
+            '/name: us-central1-docker.pkg.dev\/amoghdevops\/k8s-chaos-demo\/radius-signer/{n;s/newTag:.*/    newTag: '"${NEW_TAG}"'/;}' \
             kubernetes/jobs/kustomization.yaml
           rm kubernetes/jobs/kustomization.yaml.bak
 
-      - name: Commit Kustomize image pin
+      - name: Commit signer image pin
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           NEW_TAG: sha-${{ steps.vars.outputs.short_sha }}
@@ -83,5 +77,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add kubernetes/jobs/kustomization.yaml
-          git commit -m "chore(jobs): pin k6-ethereum image to ${NEW_TAG}"
+          git commit -m "chore(jobs): pin radius-signer image to ${NEW_TAG}"
           git push origin HEAD:${GITHUB_REF_NAME}

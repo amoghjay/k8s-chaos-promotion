@@ -5,21 +5,21 @@ namespace: url-shortener-staging
 
 resources:
   - external-secret-loadgen.yaml
+  - radius-signer.yaml
   - loadgen-job.yaml
-  - radius-tps-bench-job.yaml
 
 configMapGenerator:
   - name: k6-loadgen-script
     files:
       - loadgen.js=scripts/loadgen.js
-  - name: k6-tps-bench-script
-    files:
-      - radius-tps-bench.js=scripts/radius-tps-bench.js
 
 generatorOptions:
   disableNameSuffixHash: true
 
 images:
+  # Updated automatically by .github/workflows/build-radius-signer.yaml on main.
+  - name: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/radius-signer
+    newTag: latest
   # Updated automatically by .github/workflows/build-k6-ethereum.yaml on main.
   # CI publishes both :latest and :sha-<short>, then pins this Kustomize package
   # to the immutable sha tag for reproducible ArgoCD syncs.

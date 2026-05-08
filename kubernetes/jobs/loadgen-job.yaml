@@ -26,6 +26,8 @@ spec:
           env:
             - name: BASE_URL
               value: "http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80"
+            - name: SIGNER_URL
+              value: "http://radius-signer.url-shortener-staging.svc.cluster.local:8080"
             - name: PAYMENT_ENABLED
               value: "true"
             - name: VUS
@@ -60,21 +62,6 @@ spec:
                 secretKeyRef:
                   name: url-shortener-staging-secret
                   key: SERVICE_WALLET_ADDRESS
-            - name: WALLET_KEY_1
-              valueFrom:
-                secretKeyRef:
-                  name: loadgen-wallet-secret
-                  key: WALLET_KEY_1
-            - name: WALLET_KEY_2
-              valueFrom:
-                secretKeyRef:
-                  name: loadgen-wallet-secret
-                  key: WALLET_KEY_2
-            - name: WALLET_KEY_3
-              valueFrom:
-                secretKeyRef:
-                  name: loadgen-wallet-secret
-                  key: WALLET_KEY_3
           resources:
             requests:
               cpu: "250m"
