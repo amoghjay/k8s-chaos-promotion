@@ -54,12 +54,12 @@ k6 load generator for continuous payment traffic. Designed to run as a Kubernete
 inside `url-shortener-staging` so it's subject to the same Chaos Mesh network experiments
 as the app.
 
-**Wallet-signed flow**: each VU uses its own funded wallet key, submits a real SBC ERC-20
-transfer on Radius testnet, waits for confirmation, then uses the resulting `tx_hash`
-as payment.
+**Signer-backed flow**: each VU asks the internal `radius-signer` service to submit a
+real SBC ERC-20 transfer from its assigned funded wallet, then uses the resulting
+confirmed `tx_hash` as payment.
 
 Per-VU iteration:
-1. Submit SBC ERC-20 transfer → get `tx_hash`
+1. `POST radius-signer /pay` → get confirmed `tx_hash`
 2. `POST /shorten` with `tx_hash` → expect 201
 3. `GET /{code}` with `redirects: 0` → expect 302
 
@@ -85,17 +85,15 @@ Current thresholds:
 
 Canonical k6 job scripts now live under `kubernetes/jobs/scripts/`.
 
-Run locally with the custom k6 binary:
+Run locally with k6:
 ```bash
 SERVICE_WALLET=$(kubectl get secret url-shortener-staging-secret -n url-shortener-staging \
   -o jsonpath='{.data.SERVICE_WALLET_ADDRESS}' | base64 -d)
 
 BASE_URL=http://localhost:8000 \
+SIGNER_URL=http://localhost:8080 \
 RPC_URL=https://rpc.testnet.radiustech.xyz \
 SERVICE_WALLET_ADDRESS="$SERVICE_WALLET" \
-WALLET_KEY_1=... \
-WALLET_KEY_2=... \
-WALLET_KEY_3=... \
 VUS=3 DURATION=1m \
 k6 run kubernetes/jobs/scripts/loadgen.js
 ```
@@ -110,4 +108,5 @@ ArgoCD / Kustomize notes:
 - `kubernetes/jobs/kustomization.yaml` is the source ArgoCD should point at.
 - `kubernetes/jobs/scripts/loadgen.js` and `kubernetes/jobs/scripts/radius-tps-bench.js` are the canonical script sources.
 - Kustomize generates the `ConfigMap`s from those files automatically.
-- Update the `images:` section in `kustomization.yaml` to an immutable `sha-<short>` tag or digest once the custom `k6-ethereum` image is pushed.
+- `radius-signer` is deployed from the same Kustomize package and reuses `loadgen-wallet-secret`.
+- Update the `images:` section in `kustomization.yaml` to immutable `sha-<short>` tags or digests for both `radius-signer` and `k6-ethereum`.

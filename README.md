@@ -117,7 +117,8 @@ helm/
 kubernetes/
   bootstrap/                ArgoCD App-of-Apps (platform tools)
   kargo/                    Kargo Stages, Warehouse, AnalysisTemplates
-  jobs/                     Kustomize package for k6 jobs (loadgen + TPS benchmark)
+  jobs/                     Kustomize package for k6 jobs + radius-signer
+signer/                     FastAPI signer service for real SBC transfer submission
 scripts/
   fund-test-wallet.sh       Faucet utility — drip SBC, verify on-chain balance
   test-payment-flow.sh      Manual end-to-end payment verification
@@ -151,7 +152,7 @@ This project uses Radius testnet as the payment settlement layer. Every `POST /s
 - **`cast call` output format** — `balanceOf` returns `"500000 [5e5]"` — decimal, not hex. Parsed with `awk '{print $1}'`, never `int(..., 16)`.
 - **Faucet rate limit** — this was the Phase 5 bottleneck for the old `/drip`-based loadgen. Phase 5.5 moves to wallet-signed ERC-20 transfers with a custom `k6-ethereum` image so the chaos load generator measures the real payment path instead of faucet policy.
 - **`signature_required` degradation** — If the faucet re-enables signed mode, the bash faucet script exits cleanly with the web faucet URL. k6 VUs flip to no-payment mode permanently for that run. No private key for `SERVICE_WALLET` is ever stored in scripts.
-- **Wallet-signed loadgen** — The current Phase 5.5 load generator uses one funded wallet per VU, signs real SBC ERC-20 transfers on Radius testnet, waits for confirmation, then submits the resulting `tx_hash` to `/shorten`.
+- **Signer-backed loadgen** — The current Phase 5.5 load generator uses one funded wallet per VU through an internal `radius-signer` service, submits real SBC ERC-20 transfers on Radius testnet, waits for confirmation, then submits the resulting `tx_hash` to `/shorten`.
 
 **Phase 5 baseline — real traffic against Radius testnet:**
 

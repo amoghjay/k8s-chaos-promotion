@@ -1,4 +1,3 @@
-import { Client } from 'k6/x/ethereum';
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
@@ -15,6 +14,7 @@ const redirectOkRate       = new Rate('redirect_ok_rate');
 
 // ── ENV vars ──────────────────────────────────────────────────────────────────
 const BASE_URL          = __ENV.BASE_URL    || 'http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80';
+const SIGNER_URL        = __ENV.SIGNER_URL  || 'http://radius-signer.url-shortener-staging.svc.cluster.local:8080';
 const RPC_URL           = __ENV.RPC_URL     || 'https://rpc.testnet.radiustech.xyz';
 const CHAIN_ID          = parseInt(__ENV.CHAIN_ID || '72344');
 const SERVICE_WALLET    = __ENV.SERVICE_WALLET_ADDRESS;
@@ -30,13 +30,6 @@ const RECEIPT_TIMEOUT_S = parseInt(__ENV.RECEIPT_TIMEOUT_S || '30');
 const PRECHECK_TIMEOUT  = __ENV.PRECHECK_TIMEOUT || '5s';
 const DURATION          = __ENV.DURATION || '5m';
 const TX_GAS_LIMIT      = parseInt(__ENV.TX_GAS_LIMIT || '100000');
-
-// One key per VU — avoids nonce conflicts. VU1→KEY_1, VU2→KEY_2, VU3→KEY_3.
-const WALLET_KEYS = [
-  __ENV.WALLET_KEY_1,
-  __ENV.WALLET_KEY_2,
-  __ENV.WALLET_KEY_3,
-];
 
 const thresholds = {
   http_req_duration: ['p(95)<500'],
@@ -93,11 +86,6 @@ export function setup() {
     fail('SERVICE_WALLET_ADDRESS is required when PAYMENT_ENABLED=true');
   }
 
-  const configuredKeys = WALLET_KEYS.filter(Boolean);
-  if (configuredKeys.length < VUS) {
-    fail(`Configured ${configuredKeys.length} wallet keys but VUS=${VUS}; provide one wallet per VU`);
-  }
-
   const rpcCheck = http.post(
     RPC_URL,
     JSON.stringify({
@@ -128,74 +116,68 @@ export function setup() {
   if (actualChainId !== CHAIN_ID) {
     fail(`RPC chain ID mismatch: expected ${CHAIN_ID}, got ${actualChainId}`);
   }
-}
 
-// ── Per-VU lazy init — created on first iteration per VU ──────────────────────
-let client = null;
-function getClient() {
-  if (!PAYMENT_ENABLED) {
-    return null;
+  const signerHealth = http.get(`${SIGNER_URL}/health`, { timeout: PRECHECK_TIMEOUT });
+  validateHttpResponse(signerHealth, `SIGNER_URL health check failed for ${SIGNER_URL}/health`);
+
+  let signerPayload;
+  try {
+    signerPayload = JSON.parse(signerHealth.body);
+  } catch (_) {
+    fail(`Signer health check returned non-JSON response from ${SIGNER_URL}`);
   }
 
-  if (client) {
-    return client;
+  if ((signerPayload.wallet_count || 0) < VUS) {
+    fail(`Signer has ${signerPayload.wallet_count || 0} wallets configured but VUS=${VUS}`);
   }
-
-  const myKey = WALLET_KEYS[__VU - 1];
-  if (!myKey) {
-    fail(`WALLET_KEY_${__VU} is not set — fund one wallet per VU`);
-  }
-
-  client = new Client({
-    url:        RPC_URL,
-    privateKey: myKey, // no 0x prefix
-  });
-
-  return client;
-}
-
-// ── ABI encode ERC-20 transfer(address,uint256) ───────────────────────────────
-function encodeERC20Transfer(to, amount) {
-  const selector  = 'a9059cbb';
-  const paddedTo  = to.replace('0x', '').toLowerCase().padStart(64, '0');
-  const paddedAmt = parseInt(amount).toString(16).padStart(64, '0');
-  return '0x' + selector + paddedTo + paddedAmt;
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 export default function () {
-  // Step 1: Sign and broadcast SBC transfer on Radius testnet
+  // Step 1: Request a real SBC transfer from the signer service
   let txHash = null;
   if (PAYMENT_ENABLED) {
-    const vuClient = getClient();
     const txStartedAt = Date.now();
+    const payResponse = http.post(
+      `${SIGNER_URL}/pay`,
+      JSON.stringify({
+        wallet_index: __VU - 1,
+        amount: SBC_AMOUNT,
+        gas_limit: TX_GAS_LIMIT,
+      }),
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: `${RECEIPT_TIMEOUT_S + 5}s`,
+      },
+    );
 
-    try {
-      txHash = vuClient.sendRawTransaction({
-        to:   SBC_CONTRACT,
-        gas:  TX_GAS_LIMIT,
-        chain_id: CHAIN_ID,
-        input: encodeERC20Transfer(SERVICE_WALLET, SBC_AMOUNT),
-      });
-      txSubmitSuccessRate.add(true);
-    } catch (e) {
-      console.error(`VU${__VU} tx submit failed: ${e}`);
+    if (payResponse.status !== 200) {
+      console.error(`VU${__VU} signer payment failed: status=${payResponse.status} body=${payResponse.body}`);
       txSubmitSuccessRate.add(false);
       txReceiptSuccessRate.add(false);
       return;
     }
 
+    let payResult;
     try {
-      // Radius has sub-second finality but eth_getTransactionReceipt returns null
-      // until confirmed — wait before submitting to avoid spurious 402s from the app.
-      vuClient.waitForTransactionReceipt(txHash, RECEIPT_TIMEOUT_S);
-      txReceiptSuccessRate.add(true);
-      txConfirmationMs.add(Date.now() - txStartedAt);
+      payResult = JSON.parse(payResponse.body);
+      txSubmitSuccessRate.add(true);
     } catch (e) {
-      console.error(`VU${__VU} tx receipt wait failed: ${e}`);
+      console.error(`VU${__VU} signer returned invalid JSON: ${e}`);
+      txSubmitSuccessRate.add(false);
       txReceiptSuccessRate.add(false);
       return;
     }
+
+    txHash = payResult.tx_hash;
+    if (!txHash) {
+      console.error(`VU${__VU} signer response did not include tx_hash`);
+      txReceiptSuccessRate.add(false);
+      return;
+    }
+
+    txReceiptSuccessRate.add(true);
+    txConfirmationMs.add(payResult.confirmation_ms || (Date.now() - txStartedAt));
   }
 
   // Step 2: POST /shorten (with tx_hash if payment enabled)
