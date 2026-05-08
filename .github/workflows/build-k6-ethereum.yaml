@@ -66,7 +66,7 @@ jobs:
           NEW_TAG: sha-${{ steps.vars.outputs.short_sha }}
         run: |
           sed -i.bak \
-            '/name: us-central1-docker.pkg.dev\/amoghdevops\/k8s-chaos-demo\/k6-ethereum/{n;s/newTag:.*/    newTag: '"${NEW_TAG}"'/;}' \
+            '/name: us-central1-docker.pkg.dev\/amoghdevops\/k8s-chaos-demo\/k6-ethereum/{n;s/^[[:space:]]*newTag:.*/    newTag: '"${NEW_TAG}"'/;}' \
             kubernetes/jobs/kustomization.yaml
           rm kubernetes/jobs/kustomization.yaml.bak
 
