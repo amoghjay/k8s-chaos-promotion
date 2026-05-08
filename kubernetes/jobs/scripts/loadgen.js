@@ -149,7 +149,6 @@ function getClient() {
   client = new Client({
     url:        RPC_URL,
     privateKey: myKey, // no 0x prefix
-    chainID:    CHAIN_ID,
   });
 
   return client;
@@ -175,6 +174,7 @@ export default function () {
       txHash = vuClient.sendRawTransaction({
         to:   SBC_CONTRACT,
         gas:  TX_GAS_LIMIT,
+        chain_id: CHAIN_ID,
         data: encodeERC20Transfer(SERVICE_WALLET, SBC_AMOUNT),
       });
       txSubmitSuccessRate.add(true);

@@ -32,7 +32,6 @@ if (!WALLET_KEY) {
 const client = new Client({
   url:        RPC_URL,
   privateKey: WALLET_KEY, // no 0x prefix
-  chainID:    CHAIN_ID,
 });
 
 // ── ABI encode ERC-20 transfer(address,uint256) ───────────────────────────────
@@ -75,6 +74,7 @@ export default function () {
       txHash = client.sendRawTransaction({
         to:   SBC_CONTRACT,
         gas:  100000,
+        chain_id: CHAIN_ID,
         data: data,
       });
       client.waitForTransactionReceipt(txHash, 30);
