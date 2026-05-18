@@ -30,6 +30,11 @@ const RECEIPT_TIMEOUT_S = parseInt(__ENV.RECEIPT_TIMEOUT_S || '30');
 const PRECHECK_TIMEOUT  = __ENV.PRECHECK_TIMEOUT || '5s';
 const DURATION          = __ENV.DURATION || '5m';
 const TX_GAS_LIMIT      = parseInt(__ENV.TX_GAS_LIMIT || '100000');
+const TURNSTILE_MIN_SBC_UNITS = parseInt(__ENV.TURNSTILE_MIN_SBC_UNITS || '100000');
+const MIN_WALLET_START_BALANCE = parseInt(__ENV.MIN_WALLET_START_BALANCE || '0');
+const PRECHECK_BALANCE_BUFFER_PAYMENTS = parseInt(__ENV.PRECHECK_BALANCE_BUFFER_PAYMENTS || '5');
+const SHORTEN_RETRY_ATTEMPTS = Math.max(1, parseInt(__ENV.SHORTEN_RETRY_ATTEMPTS || '3'));
+const SHORTEN_RETRY_DELAY_MS = Math.max(0, parseInt(__ENV.SHORTEN_RETRY_DELAY_MS || '300'));
 
 const thresholds = {
   // Staging is now functionally healthy, but payment verification still adds
@@ -74,6 +79,61 @@ function validateHttpResponse(response, message) {
   if (response.status !== 200) {
     fail(`${message} (status=${response.status})`);
   }
+}
+
+function parseDurationMs(value) {
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/.exec(String(value).trim());
+  if (!match) {
+    fail(`Unsupported duration format: ${value}`);
+  }
+
+  const amount = parseFloat(match[1]);
+  const unit = match[2];
+  const multipliers = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
+  return amount * multipliers[unit];
+}
+
+function estimateRequiredWalletBalance() {
+  if (MIN_WALLET_START_BALANCE > 0) {
+    return MIN_WALLET_START_BALANCE;
+  }
+
+  const durationMs = parseDurationMs(DURATION);
+  let expectedPaymentsPerWallet = 1;
+
+  if (LOAD_PROFILE === 'arrival-rate') {
+    const timeUnitMs = parseDurationMs(ARRIVAL_TIME_UNIT);
+    const totalPayments = Math.ceil((durationMs / timeUnitMs) * ARRIVAL_RATE);
+    expectedPaymentsPerWallet = Math.max(1, Math.ceil(totalPayments / VUS));
+  } else {
+    const cycleSeconds = Math.max(SLEEP_SECONDS, 0.1);
+    expectedPaymentsPerWallet = Math.max(1, Math.ceil(durationMs / (cycleSeconds * 1000)));
+  }
+
+  return (expectedPaymentsPerWallet + PRECHECK_BALANCE_BUFFER_PAYMENTS) * SBC_AMOUNT;
+}
+
+function parseJsonBody(body, fallbackMessage) {
+  try {
+    return JSON.parse(body);
+  } catch (_) {
+    return fallbackMessage ? { detail: fallbackMessage } : null;
+  }
+}
+
+function shouldRetryShorten(response) {
+  if (response.status !== 503 && response.status !== 400) {
+    return false;
+  }
+
+  const payload = parseJsonBody(response.body);
+  const detail = String(payload?.detail || payload?.message || '').toLowerCase();
+  return (
+    detail.includes('transaction receipt not yet visible') ||
+    detail.includes('transaction not found') ||
+    detail.includes('not yet confirmed') ||
+    detail.includes('retry shortly')
+  );
 }
 
 export function setup() {
@@ -132,6 +192,38 @@ export function setup() {
   if ((signerPayload.wallet_count || 0) < VUS) {
     fail(`Signer has ${signerPayload.wallet_count || 0} wallets configured but VUS=${VUS}`);
   }
+
+  const walletsResponse = http.get(`${SIGNER_URL}/wallets`, { timeout: PRECHECK_TIMEOUT });
+  validateHttpResponse(walletsResponse, `SIGNER_URL wallet precheck failed for ${SIGNER_URL}/wallets`);
+
+  let walletPayload;
+  try {
+    walletPayload = JSON.parse(walletsResponse.body);
+  } catch (_) {
+    fail(`Signer wallet precheck returned non-JSON response from ${SIGNER_URL}`);
+  }
+
+  const signerWallets = Array.isArray(walletPayload.wallets) ? walletPayload.wallets : [];
+  if (signerWallets.length < VUS) {
+    fail(`Signer wallet precheck returned ${signerWallets.length} wallets but VUS=${VUS}`);
+  }
+
+  const baseRequiredBalance = estimateRequiredWalletBalance();
+  const reserveUnits = parseInt(walletPayload.turnstile_min_sbc_units || TURNSTILE_MIN_SBC_UNITS);
+  const selectedWallets = signerWallets
+    .slice()
+    .sort((a, b) => (a.wallet_index || 0) - (b.wallet_index || 0))
+    .slice(0, VUS);
+
+  for (const wallet of selectedWallets) {
+    const requiredBalance = baseRequiredBalance + (wallet.turnstile_reserve_required ? reserveUnits : 0);
+    if ((wallet.sbc_balance || 0) < requiredBalance) {
+      fail(
+        `Wallet ${wallet.wallet_index} (${wallet.address}) has SBC balance ${wallet.sbc_balance || 0}, ` +
+        `below required pre-run minimum ${requiredBalance}. Top up loadgen wallets before running chaos load.`
+      );
+    }
+  }
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -186,11 +278,24 @@ export default function () {
   const payload = { url: `https://example.com/load-test-${__VU}-${Date.now()}` };
   if (txHash) payload.tx_hash = txHash;
 
-  const shorten = http.post(
-    `${BASE_URL}/shorten`,
-    JSON.stringify(payload),
-    { headers: { 'Content-Type': 'application/json' } },
-  );
+  let shorten;
+  for (let attempt = 1; attempt <= SHORTEN_RETRY_ATTEMPTS; attempt += 1) {
+    shorten = http.post(
+      `${BASE_URL}/shorten`,
+      JSON.stringify(payload),
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+
+    if (shorten.status === 201 || !shouldRetryShorten(shorten) || attempt === SHORTEN_RETRY_ATTEMPTS) {
+      break;
+    }
+
+    console.warn(
+      `VU${__VU} shorten retry ${attempt}/${SHORTEN_RETRY_ATTEMPTS - 1}: ` +
+      `tx_hash=${txHash || 'none'} status=${shorten.status} body=${shorten.body}`
+    );
+    sleep(SHORTEN_RETRY_DELAY_MS / 1000);
+  }
 
   check(shorten, { 'shorten 201': (r) => r.status === 201 });
   shorten201Rate.add(shorten.status === 201);

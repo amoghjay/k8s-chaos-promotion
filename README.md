@@ -59,9 +59,12 @@ Chaos Mesh injects faults into staging while a k6 load generator runs continuous
 | 3 | Helm chart — multi-env overlays, ESO secrets | ✅ Done |
 | 4 | ArgoCD App-of-Apps + Kargo promotion pipeline | ✅ Done |
 | 5 | Observability — Prometheus, Loki, Grafana + k6 load generator | ✅ Done |
+| 5.5 | Signer-backed real-payment loadgen on Radius testnet | ✅ Done |
 | 6 | Chaos Mesh experiments | 🔄 In Progress |
 | 7 | Chaos as Kargo verification gate | 🔜 |
 | 8 | Demo script + write-up | 🔜 |
+
+Current focus after Phase 5.5: bootstrap Chaos Mesh into staging, add repeatable fault experiments against the live signer-backed traffic path, then promote those checks into the staging verification gate before prod.
 
 ---
 
@@ -149,10 +152,12 @@ This project uses Radius testnet as the payment settlement layer. Every `POST /s
 **Real gotchas hit during development:**
 
 - **Null receipt lag** — `eth_getTransactionReceipt` returns null for confirmed transactions due to RPC node lag. Added a 200ms retry before surfacing `TX_NOT_FOUND` to the user.
+- **Receipt visibility lag tolerance** — the verifier now retries receipt fetches for a short window before returning `tx_not_found`, and `/shorten` surfaces that state as transient so the load generator can retry the same `tx_hash`.
 - **`cast call` output format** — `balanceOf` returns `"500000 [5e5]"` — decimal, not hex. Parsed with `awk '{print $1}'`, never `int(..., 16)`.
 - **Faucet rate limit** — this was the Phase 5 bottleneck for the old `/drip`-based loadgen. Phase 5.5 moved the chaos path to signer-backed real ERC-20 transfers so the load generator measures the payment flow instead of faucet policy.
 - **`signature_required` degradation** — If the faucet re-enables signed mode, the bash faucet script exits cleanly with the web faucet URL. k6 VUs flip to no-payment mode permanently for that run. No private key for `SERVICE_WALLET` is ever stored in scripts.
 - **Signer-backed loadgen** — The current Phase 5.5 load generator uses one funded wallet per VU through an internal `radius-signer` service, submits real SBC ERC-20 transfers on Radius testnet, waits for confirmation, then submits the resulting `tx_hash` to `/shorten`.
+- **Wallet pre-run guard** — the load generator now checks signer wallet balances in `setup()` and fails fast if the configured VU wallets do not have enough SBC to cover the planned run.
 - **Current staging maturity** — The signer-backed path is now mostly healthy in staging: tx submit and receipt success are ~99.7%, shorten 201 success is ~94%, redirect success is 100%, and the main residual issue is verifier-side `tx_not_found` timing.
 
 **Phase 5 baseline — real traffic against Radius testnet:**

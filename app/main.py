@@ -259,6 +259,8 @@ async def shorten_url(body: ShortenRequest):
             PAYMENT_VERIFICATIONS.labels(status=payment_result.status.value).inc()
             if payment_result.status == PaymentStatus.RPC_ERROR:
                 raise HTTPException(503, payment_result.message)
+            if payment_result.status == PaymentStatus.TX_NOT_FOUND:
+                raise HTTPException(503, payment_result.message)
             if payment_result.status != PaymentStatus.SUCCESS:
                 raise HTTPException(400, payment_result.message)
         code = _generate_code()

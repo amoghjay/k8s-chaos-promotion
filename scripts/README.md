@@ -48,6 +48,24 @@ Error cases:
 
 ---
 
+## fund-loadgen-wallets.sh
+
+Convenience wrapper for the three signer/loadgen wallets. Derives the wallet addresses from
+`WALLET_KEY_1..3` using `cast wallet address`, then calls `fund-test-wallet.sh` for each.
+
+Usage:
+```bash
+WALLET_KEY_1=... WALLET_KEY_2=... WALLET_KEY_3=... \
+  ./scripts/fund-loadgen-wallets.sh
+```
+
+Notes:
+- accepts keys with or without `0x`
+- skips unset wallet env vars
+- use `SLEEP_BETWEEN_S=...` if you want a longer pause between faucet calls
+
+---
+
 ## loadgen.js
 
 k6 load generator for continuous payment traffic. Designed to run as a Kubernetes Job
@@ -62,6 +80,12 @@ Per-VU iteration:
 1. `POST radius-signer /pay` → get confirmed `tx_hash`
 2. `POST /shorten` with `tx_hash` → expect 201
 3. `GET /{code}` with `redirects: 0` → expect 302
+
+Pre-run behavior:
+1. Verify app, RPC, and signer health
+2. Fetch signer wallet balances from `GET /wallets`
+3. Fail fast if any active VU wallet is under the required starting SBC balance for the planned run
+4. Retry `/shorten` briefly when the app reports a transient receipt-visibility lag for a freshly confirmed `tx_hash`
 
 Custom metrics tracked:
 | Metric | Description |

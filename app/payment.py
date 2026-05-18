@@ -6,6 +6,7 @@ Verifies ERC-20 Transfer events on-chain via standard EVM JSON-RPC.
 import os
 import logging
 import re
+import time
 from dataclasses import dataclass
 from enum import Enum
 
@@ -23,6 +24,8 @@ SBC_CONTRACT = os.getenv("SBC_CONTRACT_ADDRESS", "0x33ad9e4bd16b69b5bfded37d8b5d
 SHORTEN_FEE = int(os.getenv("SHORTEN_FEE", "1000"))
 RADIUS_CHAIN_ID = int(os.getenv("RADIUS_CHAIN_ID", "72344"))
 RPC_TIMEOUT_SECONDS = int(os.getenv("RPC_TIMEOUT_SECONDS", "10"))
+PAYMENT_RECEIPT_RETRY_ATTEMPTS = max(1, int(os.getenv("PAYMENT_RECEIPT_RETRY_ATTEMPTS", "6")))
+PAYMENT_RECEIPT_RETRY_DELAY_MS = max(0, int(os.getenv("PAYMENT_RECEIPT_RETRY_DELAY_MS", "250")))
 
 # ERC-20 Transfer event signature: Transfer(address,address,uint256)
 TRANSFER_EVENT_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex().lower()
@@ -66,7 +69,9 @@ def init_web3():
 # ---------------------------------------------------------------------------
 class PaymentStatus(Enum):
     SUCCESS = "success"
+    INVALID_TX_HASH = "invalid_tx_hash"
     TX_NOT_FOUND = "tx_not_found"
+    TX_FAILED = "tx_failed"
     WRONG_CONTRACT = "wrong_contract"
     WRONG_RECIPIENT = "wrong_recipient"
     INSUFFICIENT_AMOUNT = "insufficient_amount"
@@ -103,24 +108,22 @@ def verify_payment(tx_hash: str) -> PaymentResult:
         return PaymentResult(PaymentStatus.RPC_ERROR, "Radius RPC client is not initialized")
 
     if not TX_HASH_RE.fullmatch(tx_hash):
-        return PaymentResult(PaymentStatus.TX_NOT_FOUND, "Invalid transaction hash format")
+        return PaymentResult(PaymentStatus.INVALID_TX_HASH, "Invalid transaction hash format")
 
     try:
-        receipt = w3.eth.get_transaction_receipt(tx_hash)
-    except TransactionNotFound:
-        return PaymentResult(PaymentStatus.TX_NOT_FOUND, "Transaction not found or not yet confirmed")
+        receipt = _get_receipt_with_retry(tx_hash)
     except Exception as exc:
         logger.error("RPC error while fetching tx receipt %s: %s", tx_hash, exc)
         return PaymentResult(PaymentStatus.RPC_ERROR, "RPC error while fetching transaction receipt")
 
     if not receipt:
-        import time; time.sleep(0.2)
-        receipt = w3.eth.get_transaction_receipt(tx_hash)
-    if not receipt:
-        return PaymentResult(PaymentStatus.TX_NOT_FOUND, "Transaction receipt not found")
+        return PaymentResult(
+            PaymentStatus.TX_NOT_FOUND,
+            "Transaction receipt not yet visible on RPC; retry shortly",
+        )
 
     if receipt.get("status") != 1:
-        return PaymentResult(PaymentStatus.TX_NOT_FOUND, "Transaction failed on-chain (status != 1)")
+        return PaymentResult(PaymentStatus.TX_FAILED, "Transaction failed on-chain (status != 1)")
 
     receipt_to = (receipt.get("to") or "").lower()
     if receipt_to != SBC_CONTRACT:
@@ -150,6 +153,22 @@ def verify_payment(tx_hash: str) -> PaymentResult:
         amount=amount,
         sender=transfer["sender"],
     )
+
+
+def _get_receipt_with_retry(tx_hash: str):
+    for attempt in range(1, PAYMENT_RECEIPT_RETRY_ATTEMPTS + 1):
+        try:
+            receipt = w3.eth.get_transaction_receipt(tx_hash)
+        except TransactionNotFound:
+            receipt = None
+
+        if receipt:
+            return receipt
+
+        if attempt < PAYMENT_RECEIPT_RETRY_ATTEMPTS:
+            time.sleep(PAYMENT_RECEIPT_RETRY_DELAY_MS / 1000)
+
+    return None
 
 
 def _find_transfer_event(logs, stablecoin_contract: str) -> dict | None:

@@ -67,6 +67,14 @@ class PayResponse(BaseModel):
     sender_balance: int
 
 
+class WalletStatus(BaseModel):
+    wallet_index: int
+    address: str
+    sbc_balance: int
+    rusd_balance_wei: int
+    turnstile_reserve_required: bool
+
+
 @dataclass
 class WalletSlot:
     index: int
@@ -130,6 +138,31 @@ async def health() -> dict:
         "wallet_count": len(wallets),
         "service_wallet": service_wallet_checksum,
         "token_contract": SBC_CONTRACT_ADDRESS.lower(),
+    }
+
+
+@app.get("/wallets")
+async def wallet_status() -> dict:
+    statuses = []
+
+    for slot in wallets:
+        sbc_balance = await asyncio.to_thread(token.functions.balanceOf(slot.address).call)
+        rusd_balance = await asyncio.to_thread(web3.eth.get_balance, slot.address)
+        statuses.append(
+            WalletStatus(
+                wallet_index=slot.index,
+                address=slot.address,
+                sbc_balance=sbc_balance,
+                rusd_balance_wei=rusd_balance,
+                turnstile_reserve_required=rusd_balance == 0,
+            ).model_dump()
+        )
+
+    return {
+        "chain_id": CHAIN_ID,
+        "wallet_count": len(wallets),
+        "turnstile_min_sbc_units": TURNSTILE_MIN_SBC_UNITS,
+        "wallets": statuses,
     }
 
 
