@@ -9,11 +9,11 @@ metadata:
 data:
   url-shortener.json: |
     {
-      "title": "URL Shortener",
+      "title": "URL Shortener + Signer",
       "uid": "url-shortener",
       "schemaVersion": 38,
       "refresh": "10s",
-      "time": { "from": "now-1h", "to": "now" },
+      "time": { "from": "now-15m", "to": "now" },
       "templating": {
         "list": [
           {
@@ -35,10 +35,18 @@ data:
       },
       "panels": [
         {
+          "id": 100,
+          "type": "row",
+          "title": "Traffic Overview",
+          "collapsed": false,
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }
+        },
+        {
           "id": 1,
-          "title": "Request Rate (req/s)",
+          "title": "Request Rate by Handler",
+          "description": "Request rate at the app, split by route. Watch for traffic collapse during chaos.",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "gridPos": { "x": 0, "y": 1, "w": 12, "h": 7 },
           "targets": [
             {
               "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (handler, method)",
@@ -46,55 +54,93 @@ data:
               "refId": "A"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "reqps" } }
+          "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } } }
         },
         {
           "id": 2,
-          "title": "P99 Request Latency (ms)",
+          "title": "P95 Latency by Handler",
+          "description": "Per-route p95. /shorten = app + payment verification. /{code} = redirect path. Both should stay flat under chaos unless the upstream they depend on is affected.",
           "type": "timeseries",
-          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "gridPos": { "x": 12, "y": 1, "w": 12, "h": 7 },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le, handler)) * 1000",
-              "legendFormat": "{{ "{{handler}}" }} p99",
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le, handler)) * 1000",
+              "legendFormat": "{{ "{{handler}}" }}",
               "refId": "A"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "ms" } }
+          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 2 } } }
+        },
+        {
+          "id": 101,
+          "type": "row",
+          "title": "HTTP Status Codes",
+          "collapsed": false,
+          "gridPos": { "x": 0, "y": 8, "w": 24, "h": 1 }
         },
         {
           "id": 3,
-          "title": "Cache Hit Rate",
-          "type": "stat",
-          "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+          "title": "Response Codes by Handler (req/s)",
+          "description": "Stacked rate of every response status, per handler. During chaos, 2xx volume should hold; new 4xx/5xx surface here first.",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 9, "w": 12, "h": 8 },
           "targets": [
             {
-              "expr": "sum(rate(url_shortener_cache_hits_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])) / (sum(rate(url_shortener_cache_hits_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])) + sum(rate(url_shortener_cache_misses_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])))",
-              "legendFormat": "hit rate",
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (handler, status)",
+              "legendFormat": "{{ "{{handler}} → {{status}}" }}",
               "refId": "A"
             }
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "percentunit",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  { "value": null,  "color": "red"    },
-                  { "value": 0.5,   "color": "yellow" },
-                  { "value": 0.8,   "color": "green"  }
-                ]
-              },
-              "color": { "mode": "thresholds" }
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "fillOpacity": 30, "stacking": { "mode": "normal" } }
             }
-          },
-          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+          }
         },
         {
           "id": 4,
+          "title": "Error Rates: 402 / 409 / 5xx (req/s)",
+          "description": "402 = no tx_hash, 409 = replay attempt, 5xx = upstream failure or app bug. All three should be 0 under healthy traffic; spikes here are the first signal during chaos.",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 9, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=\"402\"}[1m]))",
+              "legendFormat": "402 (payment required)",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=\"409\"}[1m]))",
+              "legendFormat": "409 (replay)",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=~\"5..\"}[1m]))",
+              "legendFormat": "5xx (server error)",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=\"503\"}[1m]))",
+              "legendFormat": "503 (transient — tx_not_found)",
+              "refId": "D"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "id": 102,
+          "type": "row",
+          "title": "App Headlines",
+          "collapsed": false,
+          "gridPos": { "x": 0, "y": 17, "w": 24, "h": 1 }
+        },
+        {
+          "id": 5,
           "title": "Paid /shorten Success Rate (5m)",
+          "description": "201 / (201 + non-201) over rolling 5m for POST /shorten. Anything below 95% during chaos indicates real failures, not just receipt-lag.",
           "type": "stat",
-          "gridPos": { "x": 6, "y": 8, "w": 6, "h": 4 },
+          "gridPos": { "x": 0, "y": 18, "w": 6, "h": 4 },
           "targets": [
             {
               "expr": "(sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", handler=\"/shorten\", method=\"POST\", status=\"201\"}[5m])) / sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", handler=\"/shorten\", method=\"POST\"}[5m]))) or vector(0)",
@@ -109,7 +155,7 @@ data:
                 "mode": "absolute",
                 "steps": [
                   { "value": null, "color": "red" },
-                  { "value": 0.9, "color": "yellow" },
+                  { "value": 0.9,  "color": "yellow" },
                   { "value": 0.95, "color": "green" }
                 ]
               },
@@ -119,10 +165,11 @@ data:
           "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
-          "id": 5,
-          "title": "HTTP 402 Rate (payment required/s)",
+          "id": 6,
+          "title": "HTTP 402 Rate (5m)",
+          "description": "Clients hitting /shorten without a tx_hash. Should be ~0 from the chaos loadgen (always sends tx_hash).",
           "type": "stat",
-          "gridPos": { "x": 12, "y": 8, "w": 6, "h": 4 },
+          "gridPos": { "x": 6, "y": 18, "w": 6, "h": 4 },
           "targets": [
             {
               "expr": "sum(rate(payment_402_responses_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m]))",
@@ -134,10 +181,11 @@ data:
           "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
-          "id": 6,
-          "title": "Payment Replay Attempts",
+          "id": 7,
+          "title": "Payment Replay Attempts (total)",
+          "description": "Total tx_hash reuse attempts. Any non-zero count is a correctness signal — the same tx_hash was submitted twice.",
           "type": "stat",
-          "gridPos": { "x": 18, "y": 8, "w": 6, "h": 4 },
+          "gridPos": { "x": 12, "y": 18, "w": 6, "h": 4 },
           "targets": [
             {
               "expr": "sum(payment_replay_attempts_total{job=\"url-shortener\", namespace=\"$namespace\"})",
@@ -161,10 +209,47 @@ data:
           "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
-          "id": 7,
-          "title": "Payment Verifications by Status",
+          "id": 8,
+          "title": "Cache Hit Rate (Redis)",
+          "description": "hits / (hits + misses) for GET /{code}. 100% means Redis is warm and responsive. Drops here during chaos indicate Redis outage and Postgres fallback firing.",
+          "type": "stat",
+          "gridPos": { "x": 18, "y": 18, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "sum(rate(url_shortener_cache_hits_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])) / (sum(rate(url_shortener_cache_hits_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])) + sum(rate(url_shortener_cache_misses_total{job=\"url-shortener\", namespace=\"$namespace\"}[5m])))",
+              "legendFormat": "hit rate",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red"    },
+                  { "value": 0.5,  "color": "yellow" },
+                  { "value": 0.8,  "color": "green"  }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 103,
+          "type": "row",
+          "title": "Payment Verification (App-Side)",
+          "collapsed": false,
+          "gridPos": { "x": 0, "y": 22, "w": 24, "h": 1 }
+        },
+        {
+          "id": 9,
+          "title": "Verifications by Outcome (req/s)",
+          "description": "App-side outcome of payment.verify_payment() per tx_hash. 'success' is healthy. 'tx_not_found' = transient RPC lag (now retried, then returned 503). 'tx_failed' = on-chain revert. Other values flag specific anomalies.",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "gridPos": { "x": 0, "y": 23, "w": 12, "h": 8 },
           "targets": [
             {
               "expr": "sum(rate(payment_verifications_total{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (status)",
@@ -172,55 +257,222 @@ data:
               "refId": "A"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "reqps" } }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "fillOpacity": 30, "stacking": { "mode": "normal" } }
+            }
+          }
         },
         {
-          "id": 8,
-          "title": "Payment Verification Duration p99 (ms)",
+          "id": 10,
+          "title": "Payment Verification Latency p50 / p95 / p99 (ms)",
+          "description": "Time spent inside verify_payment() — JSON-RPC round trip + receipt retry loop. Sudden p99 spikes here often precede /shorten latency spikes.",
           "type": "timeseries",
-          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "gridPos": { "x": 12, "y": 23, "w": 12, "h": 8 },
           "targets": [
             {
+              "expr": "histogram_quantile(0.50, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "p95",
+              "refId": "B"
+            },
+            {
               "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
-              "legendFormat": "p99 ms",
+              "legendFormat": "p99",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms" } }
+        },
+        {
+          "id": 104,
+          "type": "row",
+          "title": "Signer (Transaction Signing & Submission)",
+          "collapsed": false,
+          "gridPos": { "x": 0, "y": 31, "w": 24, "h": 1 }
+        },
+        {
+          "id": 11,
+          "title": "/pay Outcomes (req/s)",
+          "description": "Terminal state of every /pay call. Outcomes: success, insufficient_balance, preflight_revert, send_error, receipt_timeout, on_chain_failure, unexpected_error. Anything except 'success' is worth investigating.",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(signer_pay_total{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (outcome)",
+              "legendFormat": "{{ "{{outcome}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "fillOpacity": 30, "stacking": { "mode": "normal" } }
+            }
+          }
+        },
+        {
+          "id": 12,
+          "title": "/pay Success Rate (5m)",
+          "description": "success / total over a rolling 5m. Single number to glance at during a chaos run.",
+          "type": "stat",
+          "gridPos": { "x": 12, "y": 32, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "(sum(rate(signer_pay_total{job=\"radius-signer\", namespace=\"$namespace\", outcome=\"success\"}[5m])) / sum(rate(signer_pay_total{job=\"radius-signer\", namespace=\"$namespace\"}[5m]))) or vector(0)",
+              "legendFormat": "success rate",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red" },
+                  { "value": 0.9,  "color": "yellow" },
+                  { "value": 0.95, "color": "green" }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 13,
+          "title": "/pay p95 Duration by Outcome (ms)",
+          "description": "How long /pay takes from request to response, broken out by outcome. Successes should land near tx_submit + receipt_wait. Failures branch by where they died.",
+          "type": "timeseries",
+          "gridPos": { "x": 18, "y": 32, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(signer_pay_duration_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (le, outcome)) * 1000",
+              "legendFormat": "{{ "{{outcome}}" }} p95",
               "refId": "A"
             }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
         },
         {
-          "id": 9,
-          "title": "Error Rate (5xx req/s)",
+          "id": 14,
+          "title": "TX Submit + Receipt Wait p95 (ms)",
+          "description": "Decomposed chain latency. submit_seconds = time to push the signed tx to RPC. receipt_wait_seconds = time for that tx to be confirmed. When chain or RPC is degraded, exactly one of these spikes.",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+          "gridPos": { "x": 0, "y": 40, "w": 12, "h": 7 },
           "targets": [
             {
-              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=~\"5..\"}[1m])) or vector(0)",
-              "legendFormat": "5xx/s",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "red" } } }
-        },
-        {
-          "id": 10,
-          "title": "Money Shot: HTTP Latency vs Payment Verification Latency",
-          "description": "The chaos impact panel. During pod kills or network injection, watch both lines spike together. HTTP p99 reflects end-user experience; payment p99 reflects Radius RPC health.",
-          "type": "timeseries",
-          "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
-              "legendFormat": "HTTP p99",
+              "expr": "histogram_quantile(0.95, sum(rate(signer_tx_submit_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "tx_submit p95",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
-              "legendFormat": "Payment verification p99",
+              "expr": "histogram_quantile(0.95, sum(rate(signer_tx_receipt_wait_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "receipt_wait p95",
               "refId": "B"
             }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
+        },
+        {
+          "id": 15,
+          "title": "TX Gas Used p50 / p95 / p99",
+          "description": "Gas burned per confirmed transfer. Stable around ~100-130k for SBC transfers; any sudden shift indicates contract behavior or chain change.",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 40, "w": 12, "h": 7 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(signer_tx_gas_used_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[5m])) by (le))",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(signer_tx_gas_used_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[5m])) by (le))",
+              "legendFormat": "p95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(signer_tx_gas_used_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[5m])) by (le))",
+              "legendFormat": "p99",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" } }
+        },
+        {
+          "id": 105,
+          "type": "row",
+          "title": "Signer Wallet State",
+          "collapsed": false,
+          "gridPos": { "x": 0, "y": 47, "w": 24, "h": 1 }
+        },
+        {
+          "id": 16,
+          "title": "Wallet SBC Balance (raw units)",
+          "description": "SBC balance per signer wallet. Trends down during the load test as the wallet pays for each /shorten. If a wallet flat-lines or hits 0, that wallet is exhausted — refund via fund-loadgen-wallets.sh.",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 48, "w": 12, "h": 7 },
+          "targets": [
+            {
+              "expr": "signer_wallet_sbc_balance_units{job=\"radius-signer\", namespace=\"$namespace\"}",
+              "legendFormat": "wallet {{ "{{wallet_index}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" } }
+        },
+        {
+          "id": 17,
+          "title": "Wallet RUSD Balance (wei)",
+          "description": "Native gas reserve per wallet. 0 means the next tx will trigger Turnstile to auto-convert SBC → RUSD (costs 0.1 SBC).",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 48, "w": 12, "h": 7 },
+          "targets": [
+            {
+              "expr": "signer_wallet_rusd_balance_wei{job=\"radius-signer\", namespace=\"$namespace\"}",
+              "legendFormat": "wallet {{ "{{wallet_index}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" } }
+        },
+        {
+          "id": 106,
+          "type": "row",
+          "title": "Chaos Impact (overlay views)",
+          "collapsed": false,
+          "gridPos": { "x": 0, "y": 55, "w": 24, "h": 1 }
+        },
+        {
+          "id": 18,
+          "title": "Money Shot: HTTP p99 vs Payment-Verify p99 vs Signer-Pay p99 (ms)",
+          "description": "The one panel to watch during a chaos experiment. End-user latency (HTTP p99) tracks the slowest of its dependencies. If HTTP and payment-verify spike together → RPC or chain issue. If HTTP spikes alone → app issue. If signer-pay spikes alone → chain confirmation issue.",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 56, "w": 24, "h": 9 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "App HTTP p99",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "Payment verify p99",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(signer_pay_duration_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\", outcome=\"success\"}[1m])) by (le)) * 1000",
+              "legendFormat": "Signer /pay p99 (success)",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 2 } } }
         }
       ]
     }

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 from eth_account import Account
 from fastapi import FastAPI, HTTPException
+from prometheus_client import Counter, Gauge, Histogram
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 from web3 import HTTPProvider, Web3
 from web3.exceptions import ContractLogicError
@@ -28,6 +30,44 @@ TURNSTILE_MIN_SBC_UNITS = 100_000
 
 logger = logging.getLogger("radius_signer")
 logging.basicConfig(level=logging.INFO)
+
+
+PAY_OUTCOMES = Counter(
+    "signer_pay_total",
+    "Outcomes of /pay calls labeled by terminal state and originating wallet.",
+    ["outcome", "wallet_index"],
+)
+PAY_DURATION = Histogram(
+    "signer_pay_duration_seconds",
+    "End-to-end /pay handler duration (preflight + sign + submit + receipt).",
+    ["outcome"],
+    buckets=(0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0, 30.0),
+)
+TX_SUBMIT_DURATION = Histogram(
+    "signer_tx_submit_seconds",
+    "Time spent in eth_sendRawTransaction.",
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+TX_RECEIPT_WAIT = Histogram(
+    "signer_tx_receipt_wait_seconds",
+    "Time spent waiting for tx receipt after submit.",
+    buckets=(0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0, 30.0),
+)
+TX_GAS_USED = Histogram(
+    "signer_tx_gas_used",
+    "Gas consumed by submitted transactions (from receipt).",
+    buckets=(40000, 60000, 80000, 100000, 125000, 150000, 200000, 300000),
+)
+WALLET_SBC_BALANCE = Gauge(
+    "signer_wallet_sbc_balance_units",
+    "SBC balance per signer wallet in raw 6-decimal units. Refreshed by /pay and /wallets.",
+    ["wallet_index", "address"],
+)
+WALLET_RUSD_BALANCE = Gauge(
+    "signer_wallet_rusd_balance_wei",
+    "Native RUSD balance per signer wallet (gas reserve) in wei. Refreshed by /pay and /wallets.",
+    ["wallet_index", "address"],
+)
 
 
 ERC20_ABI = [
@@ -130,6 +170,14 @@ service_wallet_checksum = Web3.to_checksum_address(SERVICE_WALLET_ADDRESS)
 app = FastAPI(title="radius-signer", version="0.1.0")
 
 
+# Exposes /metrics with http_requests_total / http_request_duration_seconds.
+# should_group_status_codes=False so panels can distinguish 200 from 400 from 502.
+Instrumentator(
+    excluded_handlers=["/metrics", "/health"],
+    should_group_status_codes=False,
+).instrument(app).expose(app)
+
+
 @app.get("/health")
 async def health() -> dict:
     return {
@@ -148,6 +196,8 @@ async def wallet_status() -> dict:
     for slot in wallets:
         sbc_balance = await asyncio.to_thread(token.functions.balanceOf(slot.address).call)
         rusd_balance = await asyncio.to_thread(web3.eth.get_balance, slot.address)
+        WALLET_SBC_BALANCE.labels(wallet_index=str(slot.index), address=slot.address).set(sbc_balance)
+        WALLET_RUSD_BALANCE.labels(wallet_index=str(slot.index), address=slot.address).set(rusd_balance)
         statuses.append(
             WalletStatus(
                 wallet_index=slot.index,
@@ -175,18 +225,23 @@ async def pay(request: PayRequest) -> PayResponse:
         )
 
     slot = wallets[request.wallet_index]
+    wallet_idx_label = str(slot.index)
+    outcome = "unexpected_error"
+    started_at = time.time()
 
-    async with slot.lock:
-        started_at = time.time()
-
-        try:
+    try:
+        async with slot.lock:
             sender_balance = await asyncio.to_thread(token.functions.balanceOf(slot.address).call)
+            rusd_balance = await asyncio.to_thread(web3.eth.get_balance, slot.address)
+            WALLET_SBC_BALANCE.labels(wallet_index=wallet_idx_label, address=slot.address).set(sender_balance)
+            WALLET_RUSD_BALANCE.labels(wallet_index=wallet_idx_label, address=slot.address).set(rusd_balance)
+
             # Guard against Turnstile silently deducting SBC before EVM execution:
             # eth_call passes when balance >= amount, but the real tx pre-deducts
             # TURNSTILE_MIN_SBC_UNITS for gas conversion (0.1 SBC minimum per trigger).
-            rusd_balance = await asyncio.to_thread(web3.eth.get_balance, slot.address)
             effective_minimum = request.amount + (TURNSTILE_MIN_SBC_UNITS if rusd_balance == 0 else 0)
             if sender_balance < effective_minimum:
+                outcome = "insufficient_balance"
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -203,6 +258,7 @@ async def pay(request: PayRequest) -> PayResponse:
             try:
                 await asyncio.to_thread(transfer_fn.call, {"from": slot.address})
             except ContractLogicError as exc:
+                outcome = "preflight_revert"
                 raise HTTPException(
                     status_code=502,
                     detail=(
@@ -238,39 +294,78 @@ async def pay(request: PayRequest) -> PayResponse:
                 }
             )
             signed = Account.sign_transaction(transaction, slot.private_key)
-            tx_hash_bytes = await asyncio.to_thread(web3.eth.send_raw_transaction, signed.raw_transaction)
-            receipt = await asyncio.to_thread(
-                web3.eth.wait_for_transaction_receipt,
-                tx_hash_bytes,
-                RECEIPT_TIMEOUT_S,
-                0.2,
-            )
-        except Exception as exc:
-            logger.exception("payment submission failed wallet_index=%s sender=%s", slot.index, slot.address)
-            raise HTTPException(status_code=502, detail=f"payment submission failed: {exc}") from exc
 
-        if receipt.status != 1:
-            tx_hash = Web3.to_hex(tx_hash_bytes)
-            logger.error(
-                "payment transaction failed on-chain wallet_index=%s sender=%s tx_hash=%s",
-                slot.index,
-                slot.address,
-                tx_hash,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"payment transaction failed on-chain wallet_index={slot.index} "
-                    f"sender={slot.address} tx_hash={tx_hash}"
-                ),
-            )
+            try:
+                submit_t0 = time.time()
+                tx_hash_bytes = await asyncio.to_thread(
+                    web3.eth.send_raw_transaction, signed.raw_transaction
+                )
+                TX_SUBMIT_DURATION.observe(time.time() - submit_t0)
+            except Exception as exc:
+                outcome = "send_error"
+                logger.exception(
+                    "send_raw_transaction failed wallet_index=%s sender=%s",
+                    slot.index,
+                    slot.address,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"send_raw_transaction failed: {exc}",
+                ) from exc
 
-        return PayResponse(
-            tx_hash=Web3.to_hex(tx_hash_bytes),
-            wallet_index=slot.index,
-            sender=slot.address,
-            amount=request.amount,
-            confirmation_ms=int((time.time() - started_at) * 1000),
-            block_number=receipt.blockNumber,
-            sender_balance=sender_balance,
-        )
+            try:
+                receipt_t0 = time.time()
+                receipt = await asyncio.to_thread(
+                    web3.eth.wait_for_transaction_receipt,
+                    tx_hash_bytes,
+                    RECEIPT_TIMEOUT_S,
+                    0.2,
+                )
+                TX_RECEIPT_WAIT.observe(time.time() - receipt_t0)
+            except Exception as exc:
+                outcome = "receipt_timeout"
+                logger.exception(
+                    "wait_for_transaction_receipt failed wallet_index=%s sender=%s",
+                    slot.index,
+                    slot.address,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"receipt wait failed: {exc}",
+                ) from exc
+
+            TX_GAS_USED.observe(receipt.gasUsed)
+
+            if receipt.status != 1:
+                outcome = "on_chain_failure"
+                tx_hash = Web3.to_hex(tx_hash_bytes)
+                logger.error(
+                    "payment transaction failed on-chain wallet_index=%s sender=%s tx_hash=%s",
+                    slot.index,
+                    slot.address,
+                    tx_hash,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"payment transaction failed on-chain wallet_index={slot.index} "
+                        f"sender={slot.address} tx_hash={tx_hash}"
+                    ),
+                )
+
+            outcome = "success"
+            new_sbc_balance = sender_balance - request.amount
+            WALLET_SBC_BALANCE.labels(wallet_index=wallet_idx_label, address=slot.address).set(new_sbc_balance)
+
+            return PayResponse(
+                tx_hash=Web3.to_hex(tx_hash_bytes),
+                wallet_index=slot.index,
+                sender=slot.address,
+                amount=request.amount,
+                confirmation_ms=int((time.time() - started_at) * 1000),
+                block_number=receipt.blockNumber,
+                sender_balance=sender_balance,
+            )
+    finally:
+        PAY_OUTCOMES.labels(outcome=outcome, wallet_index=wallet_idx_label).inc()
+        PAY_DURATION.labels(outcome=outcome).observe(time.time() - started_at)

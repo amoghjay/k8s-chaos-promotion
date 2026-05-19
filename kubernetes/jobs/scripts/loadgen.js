@@ -37,9 +37,11 @@ const SHORTEN_RETRY_ATTEMPTS = Math.max(1, parseInt(__ENV.SHORTEN_RETRY_ATTEMPTS
 const SHORTEN_RETRY_DELAY_MS = Math.max(0, parseInt(__ENV.SHORTEN_RETRY_DELAY_MS || '300'));
 
 const thresholds = {
-  // Staging is now functionally healthy, but payment verification still adds
-  // real chain latency. Keep the gate meaningful without failing good runs.
-  http_req_duration: ['p(95)<1200'],
+  // Per-endpoint gates so chain latency on /pay doesn't drown out app-side latency.
+  // /pay is chain-bound (~1.3-1.5s on Radius testnet); /shorten and /{code} are app-only.
+  'http_req_duration{endpoint:shorten}':  ['p(95)<400'],
+  'http_req_duration{endpoint:redirect}': ['p(95)<100'],
+  'http_req_duration{endpoint:pay}':      ['p(95)<2500'],
   http_req_failed:   ['rate<0.05'],
   shorten_201_rate:  ['rate>0.90'],
   redirect_ok_rate:  ['rate>0.95'],
@@ -242,6 +244,7 @@ export default function () {
       {
         headers: { 'Content-Type': 'application/json' },
         timeout: `${RECEIPT_TIMEOUT_S + 5}s`,
+        tags: { endpoint: 'pay' },
       },
     );
 
@@ -283,7 +286,10 @@ export default function () {
     shorten = http.post(
       `${BASE_URL}/shorten`,
       JSON.stringify(payload),
-      { headers: { 'Content-Type': 'application/json' } },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        tags: { endpoint: 'shorten' },
+      },
     );
 
     if (shorten.status === 201 || !shouldRetryShorten(shorten) || attempt === SHORTEN_RETRY_ATTEMPTS) {
@@ -319,7 +325,10 @@ export default function () {
     try { code = JSON.parse(shorten.body).code || JSON.parse(shorten.body).short_code || ''; } catch (_) {}
 
     if (code) {
-      const redirect = http.get(`${BASE_URL}/${code}`, { redirects: 0 });
+      const redirect = http.get(`${BASE_URL}/${code}`, {
+        redirects: 0,
+        tags: { endpoint: 'redirect' },
+      });
       check(redirect, { 'redirect 302': (r) => r.status === 302 });
       redirectOkRate.add(redirect.status === 302);
     }

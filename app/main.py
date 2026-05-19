@@ -124,6 +124,7 @@ app = FastAPI(title="URL Shortener", version="1.0.0", lifespan=lifespan)
 
 Instrumentator(
     excluded_handlers=["/metrics", "/health", "/ready"],
+    should_group_status_codes=False,
 ).instrument(app).expose(app)
 
 
