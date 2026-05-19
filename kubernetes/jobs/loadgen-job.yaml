@@ -20,7 +20,10 @@ spec:
       restartPolicy: Never
       containers:
         - name: k6
-          image: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/k6-ethereum:latest
+          # Vanilla upstream k6. loadgen.js drives all RPC through k6/http
+          # against radius-signer, so xk6-ethereum is no longer needed here.
+          # The custom k6-ethereum image is still used by radius-tps-bench-job.yaml.
+          image: grafana/k6:latest
           imagePullPolicy: IfNotPresent
           args: ['run', '/scripts/loadgen.js']
           env:

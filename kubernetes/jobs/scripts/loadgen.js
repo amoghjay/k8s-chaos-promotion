@@ -126,8 +126,8 @@ function shouldRetryShorten(response) {
     return false;
   }
 
-  const payload = parseJsonBody(response.body);
-  const detail = String(payload?.detail || payload?.message || '').toLowerCase();
+  const payload = parseJsonBody(response.body) || {};
+  const detail = String(payload.detail || payload.message || '').toLowerCase();
   return (
     detail.includes('transaction receipt not yet visible') ||
     detail.includes('transaction not found') ||
