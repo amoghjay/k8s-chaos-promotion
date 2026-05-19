@@ -89,7 +89,7 @@ function parseDurationMs(value) {
 
   const amount = parseFloat(match[1]);
   const unit = match[2];
-  const multipliers = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
+  const multipliers = { ms: 1, s: 1000, m: 60000, h: 3600000 };
   return amount * multipliers[unit];
 }
 
