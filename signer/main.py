@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from web3 import HTTPProvider, Web3
 from web3.exceptions import ContractLogicError
 
+# Migrated to GCP project ajprojectplatform on 2026-05-27
 
 RPC_URL = os.getenv("RPC_URL", "").strip()
 CHAIN_ID = int(os.getenv("CHAIN_ID", "72344"))
