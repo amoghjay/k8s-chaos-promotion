@@ -26,7 +26,7 @@ spec:
         path: src/helm/url-shortener/values-${{ ctx.stage }}.yaml
         updates:
           - key: image.tag
-            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
 
     # Step 3: Update deployedCommit in config file
     - uses: yaml-update
@@ -34,7 +34,7 @@ spec:
         path: src/helm/url-shortener/config-${{ ctx.stage }}.yaml
         updates:
           - key: deployedCommit
-            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
 
     # Step 4: Commit both changed files. Alias `commit` exposes
     # `outputs.commit.commit` — equals the original HEAD SHA when no diff was
@@ -43,7 +43,7 @@ spec:
       as: commit
       config:
         path: src
-        message: "chore(${{ ctx.stage }}): promote to ${{ imageFrom('us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener').Tag }}"
+        message: "chore(${{ ctx.stage }}): promote to ${{ imageFrom('us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener').Tag }}"
 
     # Step 5: Push to a generated temp branch (skip if no commit was produced).
     - uses: git-push

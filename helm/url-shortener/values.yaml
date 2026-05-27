@@ -1,5 +1,5 @@
 image:
-  repository: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener
+  repository: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener
   tag: "latest"           # Kargo overrides per promotion
   pullPolicy: IfNotPresent
 

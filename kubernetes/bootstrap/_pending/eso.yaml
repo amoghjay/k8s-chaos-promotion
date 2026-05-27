@@ -14,7 +14,7 @@ spec:
     helm:
       set:
         - name: serviceAccount.annotations.iam\.gke\.io/gcp-service-account
-          value: external-secrets-sa@amoghdevops.iam.gserviceaccount.com
+          value: external-secrets-sa@ajprojectplatform.iam.gserviceaccount.com
   destination:
     server: https://kubernetes.default.svc
     namespace: external-secrets

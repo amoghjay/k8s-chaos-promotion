@@ -23,7 +23,7 @@ spec:
         path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
         updates:
           - key: image.tag
-            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
 
     # Step 3: Update deployedCommit in config file
     - uses: yaml-update
@@ -31,13 +31,13 @@ spec:
         path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
         updates:
           - key: deployedCommit
-            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener").Tag) }}
+            value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
 
     # Step 4: Commit both changed files
     - uses: git-commit
       config:
         path: ./src
-        message: "chore(dev): promote to ${{ imageFrom('us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener').Tag }}"
+        message: "chore(dev): promote to ${{ imageFrom('us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener').Tag }}"
 
     # Step 5: Push directly to main
     - uses: git-push

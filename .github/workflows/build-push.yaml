@@ -13,7 +13,7 @@ on:
       - "app/**"
 
 env:
-  IMAGE: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/url-shortener
+  IMAGE: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener
   # Used by Cosign for keyless signing (OIDC-based)
   COSIGN_EXPERIMENTAL: "true"
 
@@ -42,8 +42,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/241566214193/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
-          service_account: github-actions-sa@amoghdevops.iam.gserviceaccount.com
+          workload_identity_provider: projects/382767058620/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
+          service_account: github-actions-sa@ajprojectplatform.iam.gserviceaccount.com
 
       # ── Configure Docker to use gcloud credentials for GAR ──────────────────
       - name: Configure Docker for GAR
