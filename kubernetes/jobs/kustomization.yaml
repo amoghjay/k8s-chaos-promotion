@@ -19,7 +19,7 @@ generatorOptions:
 images:
   # Updated automatically by .github/workflows/build-radius-signer.yaml on main.
   - name: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/radius-signer
-    newTag: sha-e25a43b
+    newTag: sha-7805120
   # Used only by radius-tps-bench-job.yaml (still imports k6/x/ethereum).
   # loadgen-job.yaml moved off this image in Phase 5.5 once signing was extracted
   # to the radius-signer service — loadgen.js only needs vanilla k6/http now.
