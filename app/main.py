@@ -2,6 +2,7 @@
 URL Shortener — FastAPI + Redis + Postgres
 Designed for chaos engineering demonstrations.
 """
+# Migrated to GCP project ajprojectplatform on 2026-05-27
 
 import os
 import secrets

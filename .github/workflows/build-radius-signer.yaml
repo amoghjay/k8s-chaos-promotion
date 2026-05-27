@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/radius-signer
+  IMAGE: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/radius-signer
 
 jobs:
   build-radius-signer:
@@ -34,8 +34,8 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/241566214193/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
-          service_account: github-actions-sa@amoghdevops.iam.gserviceaccount.com
+          workload_identity_provider: projects/382767058620/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
+          service_account: github-actions-sa@ajprojectplatform.iam.gserviceaccount.com
 
       - name: Configure Docker for GAR
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
@@ -60,7 +60,7 @@ jobs:
           NEW_TAG: sha-${{ steps.vars.outputs.short_sha }}
         run: |
           sed -i.bak \
-            '/name: us-central1-docker.pkg.dev\/amoghdevops\/k8s-chaos-demo\/radius-signer/{n;s/^[[:space:]]*newTag:.*/    newTag: '"${NEW_TAG}"'/;}' \
+            '/name: us-central1-docker.pkg.dev\/ajprojectplatform\/k8s-chaos-demo\/radius-signer/{n;s/^[[:space:]]*newTag:.*/    newTag: '"${NEW_TAG}"'/;}' \
             kubernetes/jobs/kustomization.yaml
           rm kubernetes/jobs/kustomization.yaml.bak
 

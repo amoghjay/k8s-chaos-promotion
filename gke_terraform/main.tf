@@ -7,7 +7,7 @@ terraform {
     }
   }
   backend "gcs" {
-    bucket = "amoghdevops-tf-state"
+    bucket = "ajprojectplatform-tf-state"
     prefix = "gke/terraform.tfstate"
   }
 }

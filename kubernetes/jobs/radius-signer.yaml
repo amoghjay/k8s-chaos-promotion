@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: radius-signer
-          image: us-central1-docker.pkg.dev/amoghdevops/k8s-chaos-demo/radius-signer:latest
+          image: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/radius-signer:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
