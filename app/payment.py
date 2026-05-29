@@ -20,8 +20,19 @@ from dataclasses import dataclass
 from enum import Enum
 
 import httpx
+from prometheus_client import Histogram
 
 logger = logging.getLogger("payment")
+
+# Per-endpoint timing — splits "facilitator slow" from "we slow" during chaos.
+# Promised in design doc §6.1; lives here (not in main.py) because the timing
+# happens here. The Instrumentator in main.py picks it up via the global
+# prometheus registry.
+FACILITATOR_CALL_DURATION = Histogram(
+    "payment_facilitator_call_duration_seconds",
+    "Duration of each facilitator HTTP call (verify, settle), labelled by op.",
+    ["op"],
+)
 
 # ---- Config ---------------------------------------------------------------
 FACILITATOR_URL = os.getenv(
@@ -113,10 +124,12 @@ async def _post_facilitator(
     success), not the HTTP status — so 4xx/5xx is always operational, never
     a payment-level rejection. Map both to FACILITATOR_UNREACHABLE.
     """
+    op = endpoint.lstrip("/")
     try:
-        resp = await client.post(
-            f"{FACILITATOR_URL}{endpoint}", json=body, timeout=FACILITATOR_TIMEOUT_S
-        )
+        with FACILITATOR_CALL_DURATION.labels(op=op).time():
+            resp = await client.post(
+                f"{FACILITATOR_URL}{endpoint}", json=body, timeout=FACILITATOR_TIMEOUT_S
+            )
     except httpx.HTTPError as exc:
         logger.warning("facilitator %s unreachable: %s", endpoint, exc)
         return None, SettlementResult(

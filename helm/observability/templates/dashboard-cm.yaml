@@ -9,7 +9,7 @@ metadata:
 data:
   url-shortener.json: |
     {
-      "title": "URL Shortener + Signer",
+      "title": "URL Shortener + Signer (x402 / Permit2)",
       "uid": "url-shortener",
       "schemaVersion": 38,
       "refresh": "10s",
@@ -59,7 +59,7 @@ data:
         {
           "id": 2,
           "title": "P95 Latency by Handler",
-          "description": "Per-route p95. /shorten = app + payment verification. /{code} = redirect path. Both should stay flat under chaos unless the upstream they depend on is affected.",
+          "description": "Per-route p95. /shorten = app + facilitator round-trip (verify + settle). /{code} = redirect path (Redis or Postgres). Both should stay flat under chaos unless an upstream dep degrades.",
           "type": "timeseries",
           "gridPos": { "x": 12, "y": 1, "w": 12, "h": 7 },
           "targets": [
@@ -81,7 +81,7 @@ data:
         {
           "id": 3,
           "title": "Response Codes by Handler (req/s)",
-          "description": "Stacked rate of every response status, per handler. During chaos, 2xx volume should hold; new 4xx/5xx surface here first.",
+          "description": "Stacked rate of every response status, per handler. Under healthy traffic the stack is dominated by 2xx; 4xx/5xx surfaces here first under chaos.",
           "type": "timeseries",
           "gridPos": { "x": 0, "y": 9, "w": 12, "h": 8 },
           "targets": [
@@ -101,28 +101,28 @@ data:
         {
           "id": 4,
           "title": "Error Rates: 402 / 409 / 5xx (req/s)",
-          "description": "402 = no tx_hash, 409 = replay attempt, 5xx = upstream failure or app bug. All three should be 0 under healthy traffic; spikes here are the first signal during chaos.",
+          "description": "402 = no PAYMENT-SIGNATURE header or payment didn't settle. 409 = duplicate settlement_tx_hash (replay caught at app layer). 503 = facilitator unreachable. All three should be ~0 under healthy traffic.",
           "type": "timeseries",
           "gridPos": { "x": 12, "y": 9, "w": 12, "h": 8 },
           "targets": [
             {
               "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=\"402\"}[1m]))",
-              "legendFormat": "402 (payment required)",
+              "legendFormat": "402 (payment required / not settled)",
               "refId": "A"
             },
             {
               "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=\"409\"}[1m]))",
-              "legendFormat": "409 (replay)",
+              "legendFormat": "409 (settlement_tx_hash replay)",
               "refId": "B"
             },
             {
-              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=~\"5..\"}[1m]))",
-              "legendFormat": "5xx (server error)",
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=\"503\"}[1m]))",
+              "legendFormat": "503 (facilitator unreachable)",
               "refId": "C"
             },
             {
-              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=\"503\"}[1m]))",
-              "legendFormat": "503 (transient — tx_not_found)",
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=~\"5..\"}[1m]))",
+              "legendFormat": "5xx (any server error)",
               "refId": "D"
             }
           ],
@@ -138,7 +138,7 @@ data:
         {
           "id": 5,
           "title": "Paid /shorten Success Rate (5m)",
-          "description": "201 / (201 + non-201) over rolling 5m for POST /shorten. Anything below 95% during chaos indicates real failures, not just receipt-lag.",
+          "description": "201 / total over rolling 5m for POST /shorten. Anything below 95% during chaos indicates real failures.",
           "type": "stat",
           "gridPos": { "x": 0, "y": 18, "w": 6, "h": 4 },
           "targets": [
@@ -167,7 +167,7 @@ data:
         {
           "id": 6,
           "title": "HTTP 402 Rate (5m)",
-          "description": "Clients hitting /shorten without a tx_hash. Should be ~0 from the chaos loadgen (always sends tx_hash).",
+          "description": "Clients hitting /shorten without a PAYMENT-SIGNATURE header. Should be ~0 from the chaos loadgen (always sends one).",
           "type": "stat",
           "gridPos": { "x": 6, "y": 18, "w": 6, "h": 4 },
           "targets": [
@@ -183,7 +183,7 @@ data:
         {
           "id": 7,
           "title": "Payment Replay Attempts (total)",
-          "description": "Total tx_hash reuse attempts. Any non-zero count is a correctness signal — the same tx_hash was submitted twice.",
+          "description": "settlement_tx_hash UNIQUE-constraint violations. Under Permit2 + facilitator idempotency, the on-chain layer never reverts on replay — this is the load-bearing replay signal at the app layer.",
           "type": "stat",
           "gridPos": { "x": 12, "y": 18, "w": 6, "h": 4 },
           "targets": [
@@ -211,7 +211,7 @@ data:
         {
           "id": 8,
           "title": "Cache Hit Rate (Redis)",
-          "description": "hits / (hits + misses) for GET /{code}. 100% means Redis is warm and responsive. Drops here during chaos indicate Redis outage and Postgres fallback firing.",
+          "description": "hits / (hits + misses) for GET /{code}. 100% means Redis is warm. Drops during chaos indicate Redis outage + Postgres fallback firing.",
           "type": "stat",
           "gridPos": { "x": 18, "y": 18, "w": 6, "h": 4 },
           "targets": [
@@ -240,20 +240,20 @@ data:
         {
           "id": 103,
           "type": "row",
-          "title": "Payment Verification (App-Side)",
+          "title": "Payment Settlement (App ↔ Facilitator)",
           "collapsed": false,
           "gridPos": { "x": 0, "y": 22, "w": 24, "h": 1 }
         },
         {
           "id": 9,
-          "title": "Verifications by Outcome (req/s)",
-          "description": "App-side outcome of payment.verify_payment() per tx_hash. 'success' is healthy. 'tx_not_found' = transient RPC lag (now retried, then returned 503). 'tx_failed' = on-chain revert. Other values flag specific anomalies.",
+          "title": "Settlement Outcomes by Bucket (req/s)",
+          "description": "App-perceived outcome of every settle_payment() call. Outcomes: settled, signature_invalid, facilitator_verify_failed, facilitator_settle_failed, facilitator_unreachable, header_malformed. Anything except 'settled' is worth investigating.",
           "type": "timeseries",
           "gridPos": { "x": 0, "y": 23, "w": 12, "h": 8 },
           "targets": [
             {
-              "expr": "sum(rate(payment_verifications_total{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (status)",
-              "legendFormat": "{{ "{{status}}" }}",
+              "expr": "sum(rate(payment_facilitator_total{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (outcome)",
+              "legendFormat": "{{ "{{outcome}}" }}",
               "refId": "A"
             }
           ],
@@ -266,23 +266,23 @@ data:
         },
         {
           "id": 10,
-          "title": "Payment Verification Latency p50 / p95 / p99 (ms)",
-          "description": "Time spent inside verify_payment() — JSON-RPC round trip + receipt retry loop. Sudden p99 spikes here often precede /shorten latency spikes.",
+          "title": "End-to-end Settlement Latency p50 / p95 / p99 (ms)",
+          "description": "Time inside settle_payment() — header decode + /verify + /settle round-trips. p95 baseline is whatever the Radius facilitator's atomic settle takes (~500ms range). Sudden spikes correlate with chaos experiment #4 (facilitator egress).",
           "type": "timeseries",
           "gridPos": { "x": 12, "y": 23, "w": 12, "h": 8 },
           "targets": [
             {
-              "expr": "histogram_quantile(0.50, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "expr": "histogram_quantile(0.50, sum(rate(payment_settlement_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
               "legendFormat": "p50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "expr": "histogram_quantile(0.95, sum(rate(payment_settlement_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
               "legendFormat": "p95",
               "refId": "B"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "expr": "histogram_quantile(0.99, sum(rate(payment_settlement_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
               "legendFormat": "p99",
               "refId": "C"
             }
@@ -290,21 +290,36 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" } }
         },
         {
+          "id": 19,
+          "title": "Facilitator Call Duration by Op p95 (ms)",
+          "description": "Per-leg latency to the facilitator: /verify vs /settle. Lets us split 'facilitator is slow on the simulate' from 'facilitator is slow on the on-chain submit'. Load-bearing for chaos experiment #4.",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 31, "w": 24, "h": 7 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(payment_facilitator_call_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le, op)) * 1000",
+              "legendFormat": "{{ "{{op}}" }} p95",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms" } }
+        },
+        {
           "id": 104,
           "type": "row",
-          "title": "Signer (Transaction Signing & Submission)",
+          "title": "Signer (Permit2 Signing)",
           "collapsed": false,
-          "gridPos": { "x": 0, "y": 31, "w": 24, "h": 1 }
+          "gridPos": { "x": 0, "y": 38, "w": 24, "h": 1 }
         },
         {
           "id": 11,
-          "title": "/pay Outcomes (req/s)",
-          "description": "Terminal state of every /pay call. Outcomes: success, insufficient_balance, preflight_revert, send_error, receipt_timeout, on_chain_failure, unexpected_error. Anything except 'success' is worth investigating.",
+          "title": "/sign-permit2 Outcomes (req/s)",
+          "description": "Terminal state of every /sign-permit2 call. Under Permit2, the hot path is pure CPU — outcomes are essentially {success, signing_error, not_bootstrapped}. Anything but success warrants investigation.",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+          "gridPos": { "x": 0, "y": 39, "w": 12, "h": 8 },
           "targets": [
             {
-              "expr": "sum(rate(signer_pay_total{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (outcome)",
+              "expr": "sum(rate(signer_sign_total{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (outcome)",
               "legendFormat": "{{ "{{outcome}}" }}",
               "refId": "A"
             }
@@ -318,13 +333,13 @@ data:
         },
         {
           "id": 12,
-          "title": "/pay Success Rate (5m)",
+          "title": "/sign-permit2 Success Rate (5m)",
           "description": "success / total over a rolling 5m. Single number to glance at during a chaos run.",
           "type": "stat",
-          "gridPos": { "x": 12, "y": 32, "w": 6, "h": 4 },
+          "gridPos": { "x": 12, "y": 39, "w": 6, "h": 4 },
           "targets": [
             {
-              "expr": "(sum(rate(signer_pay_total{job=\"radius-signer\", namespace=\"$namespace\", outcome=\"success\"}[5m])) / sum(rate(signer_pay_total{job=\"radius-signer\", namespace=\"$namespace\"}[5m]))) or vector(0)",
+              "expr": "(sum(rate(signer_sign_total{job=\"radius-signer\", namespace=\"$namespace\", outcome=\"success\"}[5m])) / sum(rate(signer_sign_total{job=\"radius-signer\", namespace=\"$namespace\"}[5m]))) or vector(0)",
               "legendFormat": "success rate",
               "refId": "A"
             }
@@ -336,8 +351,8 @@ data:
                 "mode": "absolute",
                 "steps": [
                   { "value": null, "color": "red" },
-                  { "value": 0.9,  "color": "yellow" },
-                  { "value": 0.95, "color": "green" }
+                  { "value": 0.95, "color": "yellow" },
+                  { "value": 0.99, "color": "green" }
                 ]
               },
               "color": { "mode": "thresholds" }
@@ -347,95 +362,48 @@ data:
         },
         {
           "id": 13,
-          "title": "/pay p95 Duration by Outcome (ms)",
-          "description": "How long /pay takes from request to response, broken out by outcome. Successes should land near tx_submit + receipt_wait. Failures branch by where they died.",
+          "title": "/sign-permit2 Duration p50 / p95 (ms)",
+          "description": "Pure EIP-712 signing — should be sub-millisecond. Sourced from the FastAPI instrumentator (http_request_duration_seconds) since the signer no longer maintains its own duration histogram.",
           "type": "timeseries",
-          "gridPos": { "x": 18, "y": 32, "w": 6, "h": 4 },
+          "gridPos": { "x": 18, "y": 39, "w": 6, "h": 4 },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(signer_pay_duration_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (le, outcome)) * 1000",
-              "legendFormat": "{{ "{{outcome}}" }} p95",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "ms" } }
-        },
-        {
-          "id": 14,
-          "title": "TX Submit + Receipt Wait p95 (ms)",
-          "description": "Decomposed chain latency. submit_seconds = time to push the signed tx to RPC. receipt_wait_seconds = time for that tx to be confirmed. When chain or RPC is degraded, exactly one of these spikes.",
-          "type": "timeseries",
-          "gridPos": { "x": 0, "y": 40, "w": 12, "h": 7 },
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(signer_tx_submit_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
-              "legendFormat": "tx_submit p95",
-              "refId": "A"
-            },
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(signer_tx_receipt_wait_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
-              "legendFormat": "receipt_wait p95",
-              "refId": "B"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "ms" } }
-        },
-        {
-          "id": 15,
-          "title": "TX Gas Used p50 / p95 / p99",
-          "description": "Gas burned per confirmed transfer. Stable around ~100-130k for SBC transfers; any sudden shift indicates contract behavior or chain change.",
-          "type": "timeseries",
-          "gridPos": { "x": 12, "y": 40, "w": 12, "h": 7 },
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.50, sum(rate(signer_tx_gas_used_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[5m])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\", handler=\"/sign-permit2\"}[1m])) by (le)) * 1000",
               "legendFormat": "p50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(signer_tx_gas_used_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[5m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\", handler=\"/sign-permit2\"}[1m])) by (le)) * 1000",
               "legendFormat": "p95",
               "refId": "B"
-            },
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(signer_tx_gas_used_bucket{job=\"radius-signer\", namespace=\"$namespace\"}[5m])) by (le))",
-              "legendFormat": "p99",
-              "refId": "C"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "short" } }
+          "fieldConfig": { "defaults": { "unit": "ms" } }
         },
         {
-          "id": 105,
-          "type": "row",
-          "title": "Signer Wallet State",
-          "collapsed": false,
-          "gridPos": { "x": 0, "y": 47, "w": 24, "h": 1 }
-        },
-        {
-          "id": 16,
-          "title": "Wallet SBC Balance (raw units)",
-          "description": "SBC balance per signer wallet. Trends down during the load test as the wallet pays for each /shorten. If a wallet flat-lines or hits 0, that wallet is exhausted — refund via fund-loadgen-wallets.sh.",
+          "id": 20,
+          "title": "Permit2 Approval State (by wallet)",
+          "description": "Boot-time SBC.approve(Permit2, MAX) per signer wallet. Each wallet contributes exactly one event at signer start: approved (one-time gas hit) or already_approved (no tx). approve_failed means the wallet can't serve /sign-permit2 (returns 503) — restart the signer pod once RPC recovers.",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 48, "w": 12, "h": 7 },
+          "gridPos": { "x": 0, "y": 47, "w": 12, "h": 7 },
           "targets": [
             {
-              "expr": "signer_wallet_sbc_balance_units{job=\"radius-signer\", namespace=\"$namespace\"}",
-              "legendFormat": "wallet {{ "{{wallet_index}}" }}",
+              "expr": "sum(signer_permit2_approval_total{job=\"radius-signer\", namespace=\"$namespace\"}) by (outcome, wallet_index)",
+              "legendFormat": "wallet {{ "{{wallet_index}} → {{outcome}}" }}",
               "refId": "A"
             }
           ],
           "fieldConfig": { "defaults": { "unit": "short" } }
         },
         {
-          "id": 17,
-          "title": "Wallet RUSD Balance (wei)",
-          "description": "Native gas reserve per wallet. 0 means the next tx will trigger Turnstile to auto-convert SBC → RUSD (costs 0.1 SBC).",
+          "id": 16,
+          "title": "Wallet SBC Balance (raw units, 6 decimals)",
+          "description": "SBC balance per signer wallet. Trends down during the load test as each /shorten pulls amount from the wallet via Permit2. If a wallet flat-lines or hits 0 it's exhausted — refund via fund-test-wallet.sh.",
           "type": "timeseries",
-          "gridPos": { "x": 12, "y": 48, "w": 12, "h": 7 },
+          "gridPos": { "x": 12, "y": 47, "w": 12, "h": 7 },
           "targets": [
             {
-              "expr": "signer_wallet_rusd_balance_wei{job=\"radius-signer\", namespace=\"$namespace\"}",
+              "expr": "signer_wallet_sbc_balance_units{job=\"radius-signer\", namespace=\"$namespace\"}",
               "legendFormat": "wallet {{ "{{wallet_index}}" }}",
               "refId": "A"
             }
@@ -447,14 +415,14 @@ data:
           "type": "row",
           "title": "Chaos Impact (overlay views)",
           "collapsed": false,
-          "gridPos": { "x": 0, "y": 55, "w": 24, "h": 1 }
+          "gridPos": { "x": 0, "y": 54, "w": 24, "h": 1 }
         },
         {
           "id": 18,
-          "title": "Money Shot: HTTP p99 vs Payment-Verify p99 vs Signer-Pay p99 (ms)",
-          "description": "The one panel to watch during a chaos experiment. End-user latency (HTTP p99) tracks the slowest of its dependencies. If HTTP and payment-verify spike together → RPC or chain issue. If HTTP spikes alone → app issue. If signer-pay spikes alone → chain confirmation issue.",
+          "title": "Money Shot: HTTP p99 vs Settlement p99 vs Facilitator-Verify p95 (ms)",
+          "description": "The one panel to watch during chaos. End-user latency tracks the slowest of its deps. If HTTP+Settlement spike together → facilitator or upstream issue. If HTTP spikes alone → app issue (db/redis). If Facilitator-Verify spikes alone → facilitator's /verify is degraded while /settle is still OK (rare, but possible under chaos experiment #4).",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 56, "w": 24, "h": 9 },
+          "gridPos": { "x": 0, "y": 55, "w": 24, "h": 9 },
           "targets": [
             {
               "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
@@ -462,14 +430,19 @@ data:
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(payment_verification_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
-              "legendFormat": "Payment verify p99",
+              "expr": "histogram_quantile(0.99, sum(rate(payment_settlement_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
+              "legendFormat": "Settlement p99",
               "refId": "B"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(signer_pay_duration_seconds_bucket{job=\"radius-signer\", namespace=\"$namespace\", outcome=\"success\"}[1m])) by (le)) * 1000",
-              "legendFormat": "Signer /pay p99 (success)",
+              "expr": "histogram_quantile(0.95, sum(rate(payment_facilitator_call_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\", op=\"verify\"}[1m])) by (le)) * 1000",
+              "legendFormat": "Facilitator /verify p95",
               "refId": "C"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(payment_facilitator_call_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\", op=\"settle\"}[1m])) by (le)) * 1000",
+              "legendFormat": "Facilitator /settle p95",
+              "refId": "D"
             }
           ],
           "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 2 } } }
