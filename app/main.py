@@ -24,7 +24,6 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, field_validator
 
 from payment import (
-    SettlementResult,
     SettlementStatus,
     encode_header,
     payment_required_descriptor,
@@ -43,9 +42,7 @@ DATABASE_URL = os.getenv(
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 CODE_LENGTH = int(os.getenv("CODE_LENGTH", "8"))
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))
-PAYMENT_ENABLED = bool(os.getenv("FACILITATOR_URL", "").strip()) or bool(
-    os.getenv("PAYMENT_ENABLED", "").strip()
-)
+PAYMENT_ENABLED = bool(os.getenv("FACILITATOR_URL", "").strip())
 
 logger = logging.getLogger("url_shortener")
 logging.basicConfig(level=logging.INFO)
@@ -127,10 +124,7 @@ async def lifespan(app: FastAPI):
     try:
         db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10, command_timeout=10)
         async with db_pool.acquire() as conn:
-            try:
-                await conn.execute(SCHEMA_SQL)
-            except (asyncpg.UniqueViolationError, asyncpg.DuplicateTableError):
-                pass  # Another pod ran the migration first — ignore.
+            await conn.execute(SCHEMA_SQL)
         logger.info("Postgres connected")
     except Exception as e:
         logger.error("Postgres failed: %s", e)
@@ -187,12 +181,6 @@ class ShortenRequest(BaseModel):
         if not v.startswith(("http://", "https://")):
             raise ValueError("url must start with http:// or https://")
         return v
-
-
-class ShortenResponse(BaseModel):
-    code: str
-    short_url: str
-    original_url: str
 
 
 # ---------------------------------------------------------------------------
@@ -360,20 +348,14 @@ async def shorten_url(
             except Exception:
                 pass
 
-        response = ShortenResponse(
-            code=row["code"], short_url=f"{BASE_URL}/{row['code']}", original_url=body.url,
-        )
         headers = {}
         if settlement_tx_hash:
             headers["PAYMENT-RESPONSE"] = settled_response_header(
-                SettlementResult(
-                    status=SettlementStatus.SETTLED,
-                    message="settled",
-                    settlement_tx_hash=settlement_tx_hash,
-                    payer=payer or "",
-                )
+                settlement_tx_hash, payer or "",
             )
-        return JSONResponse(response.model_dump(), status_code=201, headers=headers)
+        return JSONResponse(
+            _short_url(row["code"], body.url), status_code=201, headers=headers,
+        )
 
 
 @app.get("/payment-info")

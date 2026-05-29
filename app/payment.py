@@ -56,7 +56,15 @@ class SettlementResult:
     payer: str = ""
 
 
-# ---- Server-side payment requirements (NOT from client input) -------------
+# ---- Server-side payment requirements (NOT echoed from client input) ------
+# Two near-identical shapes intentionally:
+#   _payment_requirements()      → what we send to facilitator /verify+/settle
+#                                  in `paymentRequirements`. `extra` carries
+#                                  only {name, version} per the facilitator API.
+#   payment_required_descriptor()→ what we base64 into the 402 PAYMENT-REQUIRED
+#                                  response header. `extra` ALSO carries
+#                                  assetTransferMethod so the client knows to
+#                                  sign Permit2 (not EIP-2612).
 def _payment_requirements() -> dict:
     return {
         "scheme": "exact",
@@ -70,10 +78,13 @@ def _payment_requirements() -> dict:
 
 
 def payment_required_descriptor(resource_url: str) -> dict:
-    """The dict that gets base64'd into the PAYMENT-REQUIRED response header.
-
-    Sent on 402 responses so the client knows what payment shape we'll accept.
-    """
+    accepts_entry = _payment_requirements() | {
+        "extra": {
+            "assetTransferMethod": "permit2",
+            "name": "Stable Coin",
+            "version": "1",
+        }
+    }
     return {
         "x402Version": 2,
         "error": "PAYMENT-SIGNATURE header is required",
@@ -82,35 +93,47 @@ def payment_required_descriptor(resource_url: str) -> dict:
             "description": "Access to /shorten",
             "mimeType": "application/json",
         },
-        "accepts": [
-            {
-                "scheme": "exact",
-                "network": NETWORK_CAIP2,
-                "amount": str(SHORTEN_FEE),
-                "asset": SBC_CONTRACT,
-                "payTo": SERVICE_WALLET,
-                "maxTimeoutSeconds": MAX_TIMEOUT_SECONDS,
-                "extra": {
-                    "assetTransferMethod": "permit2",
-                    "name": "Stable Coin",
-                    "version": "1",
-                },
-            }
-        ],
+        "accepts": [accepts_entry],
     }
 
 
 def encode_header(payload: dict) -> str:
-    """Base64-encode a JSON payload for an x402 header (PAYMENT-REQUIRED / PAYMENT-RESPONSE)."""
+    """Base64-encode a JSON payload for an x402 header."""
     return base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
 
 
 # ---- Core settlement -----------------------------------------------------
+async def _post_facilitator(
+    client: httpx.AsyncClient, endpoint: str, body: dict
+) -> tuple[dict | None, SettlementResult | None]:
+    """POST to facilitator/{endpoint}. Returns (parsed_body, None) on HTTP 2xx,
+    or (None, unreachable_result) on transport error / 4xx-5xx.
+
+    Per M1 finding: validity is signalled in the response body (isValid /
+    success), not the HTTP status — so 4xx/5xx is always operational, never
+    a payment-level rejection. Map both to FACILITATOR_UNREACHABLE.
+    """
+    try:
+        resp = await client.post(
+            f"{FACILITATOR_URL}{endpoint}", json=body, timeout=FACILITATOR_TIMEOUT_S
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("facilitator %s unreachable: %s", endpoint, exc)
+        return None, SettlementResult(
+            SettlementStatus.FACILITATOR_UNREACHABLE, f"facilitator {endpoint}: {exc}"
+        )
+    if resp.status_code >= 400:
+        return None, SettlementResult(
+            SettlementStatus.FACILITATOR_UNREACHABLE,
+            f"facilitator {endpoint} returned HTTP {resp.status_code}: {resp.text[:200]}",
+        )
+    return resp.json(), None
+
+
 async def settle_payment(
     payment_signature_header: str, client: httpx.AsyncClient
 ) -> SettlementResult:
     """Decode the client header, verify and settle with the facilitator."""
-    # 1. Decode the header (base64 → JSON).
     try:
         decoded = base64.b64decode(payment_signature_header, validate=True)
         payment_payload = json.loads(decoded)
@@ -127,52 +150,26 @@ async def settle_payment(
         "paymentRequirements": _payment_requirements(),
     }
 
-    # 2. /verify.
-    try:
-        verify_resp = await client.post(
-            f"{FACILITATOR_URL}/verify", json=body, timeout=FACILITATOR_TIMEOUT_S
-        )
-    except httpx.HTTPError as exc:
-        logger.warning("facilitator /verify unreachable: %s", exc)
-        return SettlementResult(
-            SettlementStatus.FACILITATOR_UNREACHABLE, f"facilitator /verify: {exc}"
-        )
-    if verify_resp.status_code >= 400:
-        return SettlementResult(
-            SettlementStatus.FACILITATOR_UNREACHABLE,
-            f"facilitator /verify returned HTTP {verify_resp.status_code}: {verify_resp.text[:200]}",
-        )
-    verify_body = verify_resp.json()
+    verify_body, err = await _post_facilitator(client, "/verify", body)
+    if err:
+        return err
     if not verify_body.get("isValid", False):
+        # invalidReason is free-form prose (M1 finding) — coarse-bucket
+        # signature failures, everything else is a generic verify failure.
         reason = (verify_body.get("invalidReason") or "").lower()
-        # invalidReason is free-form prose (M1 finding) — coarse-bucket signature
-        # failures and treat everything else as a generic verify failure.
-        if "signature" in reason:
-            status = SettlementStatus.SIGNATURE_INVALID
-        else:
-            status = SettlementStatus.FACILITATOR_VERIFY_FAILED
+        status = (
+            SettlementStatus.SIGNATURE_INVALID if "signature" in reason
+            else SettlementStatus.FACILITATOR_VERIFY_FAILED
+        )
         return SettlementResult(
             status,
             verify_body.get("invalidReason") or verify_body.get("invalidMessage", "verify rejected"),
             payer=verify_body.get("payer", ""),
         )
 
-    # 3. /settle.
-    try:
-        settle_resp = await client.post(
-            f"{FACILITATOR_URL}/settle", json=body, timeout=FACILITATOR_TIMEOUT_S
-        )
-    except httpx.HTTPError as exc:
-        logger.warning("facilitator /settle unreachable: %s", exc)
-        return SettlementResult(
-            SettlementStatus.FACILITATOR_UNREACHABLE, f"facilitator /settle: {exc}"
-        )
-    if settle_resp.status_code >= 400:
-        return SettlementResult(
-            SettlementStatus.FACILITATOR_UNREACHABLE,
-            f"facilitator /settle returned HTTP {settle_resp.status_code}: {settle_resp.text[:200]}",
-        )
-    settle_body = settle_resp.json()
+    settle_body, err = await _post_facilitator(client, "/settle", body)
+    if err:
+        return err
     if not settle_body.get("success", False):
         return SettlementResult(
             SettlementStatus.FACILITATOR_SETTLE_FAILED,
@@ -188,11 +185,11 @@ async def settle_payment(
     )
 
 
-def settled_response_header(result: SettlementResult, network: str = NETWORK_CAIP2) -> str:
+def settled_response_header(settlement_tx_hash: str, payer: str) -> str:
     """Base64-encode the PAYMENT-RESPONSE header for a successful settlement."""
     return encode_header({
         "success": True,
-        "transaction": result.settlement_tx_hash,
-        "payer": result.payer,
-        "network": network,
+        "transaction": settlement_tx_hash,
+        "payer": payer,
+        "network": NETWORK_CAIP2,
     })
