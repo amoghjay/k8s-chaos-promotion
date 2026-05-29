@@ -122,10 +122,16 @@ VUS=3 DURATION=1m \
 k6 run kubernetes/jobs/scripts/loadgen.js
 ```
 
-Run as k8s Job (Phase 5+):
+Run as a one-off k8s Job from the suspended CronJob template (Phase 5+):
 ```bash
+# Apply the kustomize package once (signer + secrets + CronJob template + script ConfigMap).
+# Idempotent — the CronJob is suspended, so applying it never auto-fires a load run.
 kubectl apply -k kubernetes/jobs
-kubectl logs -f job/loadgen -n url-shortener-staging
+
+# Trigger a load run on demand (each invocation creates a uniquely-named Job):
+RUN=loadgen-$(date +%s)
+kubectl -n url-shortener-staging create job --from=cronjob/loadgen "$RUN"
+kubectl -n url-shortener-staging logs -f "job/$RUN"
 ```
 
 ArgoCD / Kustomize notes:

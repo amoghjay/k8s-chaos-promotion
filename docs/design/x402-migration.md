@@ -1,6 +1,6 @@
 # Design: x402 payment migration
 
-**Status:** M0 + M1 complete (2026-05-29). Facilitator switched mid-flight from Stablecoin.xyz (EIP-2612) to Radius first-party (Permit2). M2 next. See §14 for M0 recon, §15 for M1 results and the pivot record.
+**Status:** **Complete — M0 through M7 done (2026-05-29).** Phase 5.5b staging baseline locked at 100% success / 301 iter / e2e p95 ~700ms (2.5× faster than pre-x402's ~1.8s). Loadgen converted to suspended `CronJob` for clean manual triggering during chaos work. Pre-Phase 6 ready. See §14 for M0 recon, §15 for the EIP-2612→Permit2 pivot record and Permit2 spike results; baseline in `LEARNINGS.md`.
 **Author:** Amogh
 **Date:** 2026-05-28
 **Supersedes:** [`X402_MIGRATION_PLAN.md`](../../X402_MIGRATION_PLAN.md) (May 8, 2026 — written before facilitator support and signer-backed loadgen landed)
@@ -491,12 +491,13 @@ Settlement tx: `0x9714e90aeca97b5cc91bd8ac44616b6e39a75ae133f115a827c1e8b94dcea9
 - **The Permit2 `spender` is the proxy, not the facilitator.** Payers sign for `x402ExactPermit2Proxy` (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`). The proxy validates the witness and constrains the destination, so the facilitator can't redirect funds — security property worth a sentence in any blog post.
 - **No `/supported` discovery loop required.** Radius's `signers: {}` is empty; the spender is a constant.
 
-### 15.5 Artifacts
+### 15.5 Artifacts (removed in M7)
 
-- `scratch/x402-m1/spike.py` — Permit2 spike (current).
-- `scratch/x402-m1/FINDINGS.md` — Permit2 findings + design-doc diff list (this section folded most of it back).
-- `scratch/x402-m1/responses.jsonl` — every HTTP exchange (both spikes). M3 references this for outcome-bucket labels.
-- `scratch/x402-m1/spike_eip2612_stablecoinxyz.py` + `FINDINGS_eip2612_stablecoinxyz.md` — preserved as historical reference for the EIP-2612 path we discarded.
+The M1 spike scratch dir (`scratch/x402-m1/`) was deleted as part of the M7 wrap-up. It contained:
 
-The scratch dir itself is non-production; expected to be `git rm -r`'d at M2 once the real signer change lands and the spike's role is over.
+- `spike.py` + `FINDINGS.md` — the Permit2 spike that proved the architecture (settlement tx `0x9714e90a…`).
+- `spike_eip2612_stablecoinxyz.py` + `FINDINGS_eip2612_stablecoinxyz.md` — the earlier EIP-2612 spike against Stablecoin.xyz, preserved as historical record of the pre-pivot direction.
+- `responses.jsonl` / `responses_eip2612.jsonl` — every HTTP exchange from both spikes.
+
+Everything load-bearing was folded into this design doc (§14 + §15) and `LEARNINGS.md` before deletion. If the spikes are ever needed again, they can be restored from git history at any commit prior to the M7 cleanup commit.
 

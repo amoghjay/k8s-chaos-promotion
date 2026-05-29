@@ -1,71 +1,82 @@
 apiVersion: batch/v1
-kind: Job
+kind: CronJob
 metadata:
   name: loadgen
   namespace: url-shortener-staging
-  annotations:
-    argocd.argoproj.io/sync-options: Force=true,Replace=true
 spec:
-  backoffLimit: 0
-  activeDeadlineSeconds: 600
-  ttlSecondsAfterFinished: 3600
-  selector:
-    matchLabels:
-      job-name: loadgen
-  template:
-    metadata:
-      labels:
-        job-name: loadgen
+  # Suspended by design — ArgoCD sync should NOT auto-fire a load run.
+  # Triggering syncs (signer image bumps, config tweaks) shouldn't disrupt or
+  # accidentally start tests. A load run is always an explicit, named action:
+  #
+  #   kubectl -n url-shortener-staging create job --from=cronjob/loadgen \
+  #     loadgen-$(date +%s)
+  #
+  #   kubectl -n url-shortener-staging logs -f job/loadgen-<timestamp>
+  #
+  # The `schedule:` field is required by the API but never fires while
+  # suspended; pick a placeholder that wouldn't be alarming if accidentally
+  # unsuspended (Sundays at midnight on Jan 1 → won't fire most years).
+  suspend: true
+  schedule: "0 0 1 1 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
     spec:
-      restartPolicy: Never
-      containers:
-        - name: k6
-          # Vanilla upstream k6. loadgen.js drives all traffic through k6/http
-          # against radius-signer + url-shortener; no xk6 extensions needed.
-          image: grafana/k6:latest
-          imagePullPolicy: IfNotPresent
-          args: ['run', '/scripts/loadgen.js']
-          env:
-            - name: BASE_URL
-              value: "http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80"
-            - name: SIGNER_URL
-              value: "http://radius-signer.url-shortener-staging.svc.cluster.local:8080"
-            - name: PAYMENT_ENABLED
-              value: "true"
-            - name: VUS
-              value: "3"
-            - name: LOAD_PROFILE
-              value: "arrival-rate"
-            - name: ARRIVAL_RATE
-              value: "60"
-            - name: ARRIVAL_TIME_UNIT
-              value: "1m"
-            - name: DURATION
-              value: "5m"
-            - name: NETWORK_CAIP2
-              value: "eip155:72344"
-            - name: SBC_CONTRACT_ADDRESS
-              value: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
-            - name: SBC_AMOUNT
-              value: "1000"
-            - name: PRECHECK_TIMEOUT
-              value: "5s"
-            - name: SERVICE_WALLET_ADDRESS
-              valueFrom:
-                secretKeyRef:
-                  name: url-shortener-staging-secret
-                  key: SERVICE_WALLET_ADDRESS
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "256Mi"
-            limits:
-              cpu: "1000m"
-              memory: "1Gi"
-          volumeMounts:
+      backoffLimit: 0
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: k6
+              # Vanilla upstream k6. loadgen.js drives all traffic through k6/http
+              # against radius-signer + url-shortener; no xk6 extensions needed.
+              image: grafana/k6:latest
+              imagePullPolicy: IfNotPresent
+              args: ['run', '/scripts/loadgen.js']
+              env:
+                - name: BASE_URL
+                  value: "http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80"
+                - name: SIGNER_URL
+                  value: "http://radius-signer.url-shortener-staging.svc.cluster.local:8080"
+                - name: PAYMENT_ENABLED
+                  value: "true"
+                - name: VUS
+                  value: "3"
+                - name: LOAD_PROFILE
+                  value: "arrival-rate"
+                - name: ARRIVAL_RATE
+                  value: "60"
+                - name: ARRIVAL_TIME_UNIT
+                  value: "1m"
+                - name: DURATION
+                  value: "5m"
+                - name: NETWORK_CAIP2
+                  value: "eip155:72344"
+                - name: SBC_CONTRACT_ADDRESS
+                  value: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
+                - name: SBC_AMOUNT
+                  value: "1000"
+                - name: PRECHECK_TIMEOUT
+                  value: "5s"
+                - name: SERVICE_WALLET_ADDRESS
+                  valueFrom:
+                    secretKeyRef:
+                      name: url-shortener-staging-secret
+                      key: SERVICE_WALLET_ADDRESS
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "1000m"
+                  memory: "1Gi"
+              volumeMounts:
+                - name: k6-script
+                  mountPath: /scripts
+          volumes:
             - name: k6-script
-              mountPath: /scripts
-      volumes:
-        - name: k6-script
-          configMap:
-            name: k6-loadgen-script
+              configMap:
+                name: k6-loadgen-script

@@ -36,7 +36,12 @@ const thresholds = {
   // /sign-permit2 is pure CPU — sub-millisecond. Was a real chain submission in
   // the pre-x402 flow (~1.5s on Radius testnet); the threshold tightens by 25x.
   'http_req_duration{endpoint:sign}':     ['p(95)<100'],
-  'http_req_duration{endpoint:shorten}':  ['p(95)<400'],
+  // /shorten now includes the facilitator's atomic on-chain Permit2.settle —
+  // the pre-x402 budget (p95<400ms, when /shorten only verified a client-side
+  // tx) is no longer realistic. Baseline observed in M6 2026-05-29: p95~680ms,
+  // bottoming at ~540ms (Radius testnet single-tx finalization). 1000ms gives
+  // comfortable headroom for chaos-induced variance.
+  'http_req_duration{endpoint:shorten}':  ['p(95)<1000'],
   'http_req_duration{endpoint:redirect}': ['p(95)<100'],
   http_req_failed:   ['rate<0.05'],
   shorten_201_rate:  ['rate>0.90'],
