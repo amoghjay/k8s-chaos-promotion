@@ -18,9 +18,9 @@ app:
 
 radius:
   enabled: true
-  rpcUrl: ""                  # passed via --set at install time
+  # facilitatorUrl + networkCaip2 default to testnet via values.yaml
   serviceWalletAddress: ""    # passed via --set at install time
-  rpcTimeoutSeconds: "10"     # generous timeout — survives normal network latency
+  facilitatorTimeoutSeconds: "30"  # generous — facilitator does the on-chain work
 
 resources:
   requests: { cpu: 100m, memory: 128Mi }
@@ -35,5 +35,4 @@ postgresql:
 
 externalSecrets:
   enabled: true
-  radiusRpcUrlSecret: "radius-rpc-url-testnet"
   serviceWalletSecret: "service-wallet-address-testnet"

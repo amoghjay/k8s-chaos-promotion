@@ -78,7 +78,7 @@ check "  Stage prod exists" "kubectl get stage prod -n url-shortener"
 
 # --- GAR images present ---
 log_info "GAR images in new project:"
-for img in url-shortener radius-signer k6-ethereum; do
+for img in url-shortener radius-signer; do
   count=$(gcloud artifacts docker images list \
     "us-central1-docker.pkg.dev/$PROJECT_ID/k8s-chaos-demo/$img" \
     --project="$PROJECT_ID" --include-tags --limit=1 --format='value(IMAGE)' 2>/dev/null | wc -l | tr -d ' ')

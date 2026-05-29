@@ -15,10 +15,11 @@ app:
 
 radius:
   enabled: true
-  rpcUrl: ""                  # injected via ESO ExternalSecret
+  facilitatorUrl: "https://facilitator.radiustech.xyz"  # mainnet facilitator
+  networkCaip2: "eip155:723487"
   serviceWalletAddress: ""    # injected via ESO ExternalSecret
-  chainId: "723"              # mainnet
-  rpcTimeoutSeconds: "10"
+  chainId: "723487"           # mainnet — corrected from old 723 per Radius chain-ID migration
+  facilitatorTimeoutSeconds: "30"
 
 resources:
   requests: { cpu: 200m, memory: 256Mi }
@@ -37,5 +38,4 @@ serviceAccount:
 
 externalSecrets:
   enabled: true
-  radiusRpcUrlSecret: "radius-rpc-url-mainnet"
   serviceWalletSecret: "service-wallet-address-mainnet"

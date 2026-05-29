@@ -1,8 +1,12 @@
 """
 URL Shortener — FastAPI + Redis + Postgres
 Designed for chaos engineering demonstrations.
+
+Payment path is x402 Permit2 via the Radius facilitator. The app never touches
+the chain — payment.py forwards the client's PAYMENT-SIGNATURE to the
+facilitator's /verify and /settle endpoints, and persists the resulting
+settlement tx hash to Postgres.
 """
-# Migrated to GCP project ajprojectplatform on 2026-05-27
 
 import os
 import secrets
@@ -10,25 +14,35 @@ import string
 import logging
 from contextlib import asynccontextmanager
 
-import asyncio
 import asyncpg
+import httpx
 import redis.asyncio as aioredis
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import RedirectResponse, JSONResponse, Response
 from prometheus_client import Counter, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, field_validator
-from payment import init_web3, verify_payment, get_payment_info, PaymentStatus
+
+from payment import (
+    SettlementStatus,
+    encode_header,
+    payment_required_descriptor,
+    settle_payment,
+    settled_response_header,
+)
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://urlshortener:password@localhost:5432/urlshortener")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://urlshortener:password@localhost:5432/urlshortener",
+)
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 CODE_LENGTH = int(os.getenv("CODE_LENGTH", "8"))
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))
-PAYMENT_ENABLED = bool(os.getenv("RADIUS_RPC_URL", "").strip())
+PAYMENT_ENABLED = bool(os.getenv("FACILITATOR_URL", "").strip())
 
 logger = logging.getLogger("url_shortener")
 logging.basicConfig(level=logging.INFO)
@@ -39,22 +53,25 @@ logging.basicConfig(level=logging.INFO)
 CACHE_HITS = Counter("url_shortener_cache_hits_total", "Redis cache hits")
 CACHE_MISSES = Counter("url_shortener_cache_misses_total", "Redis cache misses (Postgres fallback)")
 URLS_CREATED = Counter("url_shortener_urls_created_total", "Short URLs created")
-PAYMENT_VERIFICATION_DURATION = Histogram(
-    "payment_verification_duration_seconds",
-    "Time spent verifying payment transactions",
+
+# Outcome bucket for the full app-perceived facilitator flow.
+# Labels mirror payment.SettlementStatus + an extra `settled` value on success.
+PAYMENT_FACILITATOR = Counter(
+    "payment_facilitator_total",
+    "Outcomes of facilitator-mediated payment attempts.",
+    ["outcome"],
 )
-PAYMENT_VERIFICATIONS = Counter(
-    "payment_verifications_total",
-    "Total payment verification attempts by status",
-    ["status"],
+PAYMENT_SETTLEMENT_DURATION = Histogram(
+    "payment_settlement_duration_seconds",
+    "App-perceived end-to-end payment time (header decode + verify + settle).",
 )
 PAYMENT_402_RESPONSES = Counter(
     "payment_402_responses_total",
-    "Total HTTP 402 responses for payment-required requests",
+    "HTTP 402 responses emitted when PAYMENT-SIGNATURE header is missing.",
 )
 PAYMENT_REPLAY_ATTEMPTS = Counter(
     "payment_replay_attempts_total",
-    "Total payment replay attempts detected via tx_hash uniqueness",
+    "Duplicate settlement_tx_hash inserts caught by the UNIQUE constraint.",
 )
 
 # ---------------------------------------------------------------------------
@@ -62,6 +79,7 @@ PAYMENT_REPLAY_ATTEMPTS = Counter(
 # ---------------------------------------------------------------------------
 db_pool: asyncpg.Pool | None = None
 redis_client: aioredis.Redis | None = None
+http_client: httpx.AsyncClient | None = None
 _started: bool = False  # Flipped once after first successful readiness check
 
 ALPHABET = string.ascii_letters + string.digits
@@ -71,34 +89,47 @@ def _generate_code() -> str:
     return "".join(secrets.choice(ALPHABET) for _ in range(CODE_LENGTH))
 
 
+# Schema bootstrap. CREATE TABLE for fresh deploys; ALTER for upgrades from the
+# pre-x402 schema that had tx_hash instead of settlement_tx_hash.
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS urls (
+    code               VARCHAR(16) PRIMARY KEY,
+    url                TEXT NOT NULL UNIQUE,
+    settlement_tx_hash VARCHAR(66) UNIQUE,
+    payer_address      VARCHAR(42),
+    settled_at         TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ DEFAULT NOW()
+);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'urls' AND column_name = 'tx_hash'
+    ) THEN
+        ALTER TABLE urls RENAME COLUMN tx_hash TO settlement_tx_hash;
+    END IF;
+END $$;
+ALTER TABLE urls ADD COLUMN IF NOT EXISTS payer_address VARCHAR(42);
+ALTER TABLE urls ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;
+"""
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db_pool, redis_client
+    global db_pool, redis_client, http_client
 
-    # Postgres
     try:
         db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10, command_timeout=10)
         async with db_pool.acquire() as conn:
-            try:
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS urls (
-                        code       VARCHAR(16) PRIMARY KEY,
-                        url        TEXT NOT NULL UNIQUE,
-                        tx_hash    VARCHAR(66) UNIQUE,
-                        created_at TIMESTAMPTZ DEFAULT NOW()
-                    )
-                """)
-            except (asyncpg.UniqueViolationError, asyncpg.DuplicateTableError):
-                pass  # Another pod created it first - ignore
+            await conn.execute(SCHEMA_SQL)
         logger.info("Postgres connected")
     except Exception as e:
         logger.error("Postgres failed: %s", e)
         db_pool = None
 
-    # Redis
     try:
         redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
         await redis_client.ping()
@@ -107,8 +138,14 @@ async def lifespan(app: FastAPI):
         logger.error("Redis failed: %s", e)
         redis_client = None
 
-    if PAYMENT_ENABLED:
-        init_web3()
+    # One AsyncClient for the lifetime of the pod — connection pooling +
+    # keepalive matter when we hit the facilitator on every /shorten.
+    http_client = httpx.AsyncClient()
+    logger.info(
+        "Payment %s (facilitator=%s)",
+        "enabled" if PAYMENT_ENABLED else "disabled",
+        os.getenv("FACILITATOR_URL", "<unset>"),
+    )
 
     yield
 
@@ -116,12 +153,14 @@ async def lifespan(app: FastAPI):
         await db_pool.close()
     if redis_client:
         await redis_client.aclose()
+    if http_client:
+        await http_client.aclose()
 
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="URL Shortener", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="URL Shortener", version="2.0.0", lifespan=lifespan)
 
 Instrumentator(
     excluded_handlers=["/metrics", "/health", "/ready"],
@@ -134,7 +173,6 @@ Instrumentator(
 # ---------------------------------------------------------------------------
 class ShortenRequest(BaseModel):
     url: str
-    tx_hash: str | None = None
 
     @field_validator("url")
     @classmethod
@@ -145,26 +183,12 @@ class ShortenRequest(BaseModel):
         return v
 
 
-class ShortenResponse(BaseModel):
-    code: str
-    short_url: str
-    original_url: str
-
-
 # ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Health endpoints (separate liveness and readiness)
+# Health endpoints
 # ---------------------------------------------------------------------------
 @app.get("/health")
 async def health():
-    """
-    LIVENESS probe. Returns 200 if the process is alive and Postgres is reachable.
-    Redis being down does NOT make this fail — the app degrades gracefully
-    by falling back to Postgres for reads. During chaos testing, killing Redis
-    should NOT cause Kubernetes to restart or remove the FastAPI pod.
-    """
+    """Liveness. 200 if Postgres is reachable. Redis-down does not fail liveness."""
     pg_ok = False
     if db_pool:
         try:
@@ -177,7 +201,6 @@ async def health():
     if not pg_ok:
         return JSONResponse({"status": "unhealthy", "postgres": "down"}, status_code=503)
 
-    # Check Redis but don't fail on it
     redis_ok = False
     if redis_client:
         try:
@@ -192,15 +215,13 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """
-    READINESS probe. During initial startup, requires BOTH Postgres and Redis
-    to be reachable (so Kubernetes doesn't send traffic before backends are up).
-    After the first successful check, flips a flag and only requires Postgres —
-    so killing Redis mid-run does NOT pull the pod from the Service.
+    """Readiness. Postgres required always; Redis required only before the first ready check.
+
+    After the first successful readiness, killing Redis must not pull the pod from
+    the Service — chaos experiment #2 depends on this.
     """
     global _started
 
-    # Postgres is always required
     pg_ok = False
     if db_pool:
         try:
@@ -213,7 +234,6 @@ async def ready():
     if not pg_ok:
         return JSONResponse({"status": "not ready", "postgres": "down"}, status_code=503)
 
-    # Redis only required before first successful startup
     if not _started:
         redis_ok = False
         if redis_client:
@@ -226,71 +246,88 @@ async def ready():
         if not redis_ok:
             return JSONResponse({"status": "not ready", "redis": "down"}, status_code=503)
 
-        _started = True  # Both backends confirmed — never require Redis again
+        _started = True
 
     return JSONResponse({"status": "ready"})
 
-@app.post("/shorten", response_model=ShortenResponse, status_code=201)
-async def shorten_url(body: ShortenRequest):
+
+# ---------------------------------------------------------------------------
+# /shorten — x402 payment-gated URL creation
+# ---------------------------------------------------------------------------
+def _short_url(code: str, original: str) -> dict:
+    return {"code": code, "short_url": f"{BASE_URL}/{code}", "original_url": original}
+
+
+@app.post("/shorten", status_code=201)
+async def shorten_url(
+    body: ShortenRequest,
+    request: Request,
+    payment_signature: str | None = Header(default=None, alias="PAYMENT-SIGNATURE"),
+):
     if db_pool is None:
         raise HTTPException(503, "Database unavailable")
 
     async with db_pool.acquire() as conn:
-        # If this URL already exists, return it without requiring another payment.
-        existing_url = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
-        if existing_url:
-            return JSONResponse(
-                {
-                    "code": existing_url["code"],
-                    "short_url": f"{BASE_URL}/{existing_url['code']}",
-                    "original_url": body.url,
-                },
-                status_code=200,
-            )
+        # If this URL was already shortened, return it idempotently — no new payment required.
+        existing = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
+        if existing:
+            return JSONResponse(_short_url(existing["code"], body.url), status_code=200)
 
-        tx_hash: str | None = None
+        settlement_tx_hash: str | None = None
+        payer: str | None = None
+
         if PAYMENT_ENABLED:
-            if not body.tx_hash:
+            if not payment_signature:
                 PAYMENT_402_RESPONSES.inc()
-                return JSONResponse(get_payment_info(), status_code=402)
+                descriptor = payment_required_descriptor(str(request.url))
+                return Response(
+                    content="{}",
+                    status_code=402,
+                    media_type="application/json",
+                    headers={"PAYMENT-REQUIRED": encode_header(descriptor)},
+                )
 
-            tx_hash = body.tx_hash.strip()
-            with PAYMENT_VERIFICATION_DURATION.time():
-                payment_result = await asyncio.to_thread(verify_payment, tx_hash)
+            if http_client is None:
+                raise HTTPException(503, "HTTP client not initialised")
 
-            PAYMENT_VERIFICATIONS.labels(status=payment_result.status.value).inc()
-            if payment_result.status == PaymentStatus.RPC_ERROR:
-                raise HTTPException(503, payment_result.message)
-            if payment_result.status == PaymentStatus.TX_NOT_FOUND:
-                raise HTTPException(503, payment_result.message)
-            if payment_result.status != PaymentStatus.SUCCESS:
-                raise HTTPException(400, payment_result.message)
+            with PAYMENT_SETTLEMENT_DURATION.time():
+                result = await settle_payment(payment_signature, http_client)
+
+            PAYMENT_FACILITATOR.labels(outcome=result.status.value).inc()
+
+            if result.status == SettlementStatus.FACILITATOR_UNREACHABLE:
+                raise HTTPException(503, result.message)
+            if result.status != SettlementStatus.SETTLED:
+                raise HTTPException(402, result.message)
+
+            settlement_tx_hash = result.settlement_tx_hash
+            payer = result.payer
+
         code = _generate_code()
-        if PAYMENT_ENABLED and tx_hash:
+
+        if PAYMENT_ENABLED:
             try:
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO urls (code, url, tx_hash)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO urls (code, url, settlement_tx_hash, payer_address, settled_at)
+                    VALUES ($1, $2, $3, $4, NOW())
                     ON CONFLICT (url) DO NOTHING
                     RETURNING code
                     """,
-                    code, body.url, tx_hash
+                    code, body.url, settlement_tx_hash, payer,
                 )
             except asyncpg.UniqueViolationError:
+                # settlement_tx_hash UNIQUE — the facilitator returned a cached
+                # prior settlement, which we've already stored for a different
+                # URL attempt. This is the load-bearing replay signal under
+                # Permit2 (see design doc §5.1).
                 PAYMENT_REPLAY_ATTEMPTS.inc()
-                raise HTTPException(409, "Transaction hash already used")
+                raise HTTPException(409, "Settlement transaction already used")
+
             if row is None:
                 existing_row = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
                 if existing_row:
-                    return JSONResponse(
-                        {
-                            "code": existing_row["code"],
-                            "short_url": f"{BASE_URL}/{existing_row['code']}",
-                            "original_url": body.url,
-                        },
-                        status_code=200,
-                    )
+                    return JSONResponse(_short_url(existing_row["code"], body.url), status_code=200)
                 raise HTTPException(500, "Failed to create or resolve short URL")
         else:
             row = await conn.fetchrow(
@@ -300,7 +337,7 @@ async def shorten_url(body: ShortenRequest):
                 ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url
                 RETURNING code
                 """,
-                code, body.url
+                code, body.url,
             )
 
         URLS_CREATED.inc()
@@ -311,19 +348,34 @@ async def shorten_url(body: ShortenRequest):
             except Exception:
                 pass
 
-        return ShortenResponse(code=row["code"], short_url=f"{BASE_URL}/{row['code']}", original_url=body.url)
+        headers = {}
+        if settlement_tx_hash:
+            headers["PAYMENT-RESPONSE"] = settled_response_header(
+                settlement_tx_hash, payer or "",
+            )
+        return JSONResponse(
+            _short_url(row["code"], body.url), status_code=201, headers=headers,
+        )
 
 
 @app.get("/payment-info")
 async def payment_info():
-    info = get_payment_info()
-    info["payment_enabled"] = PAYMENT_ENABLED
-    return info
+    """Diagnostic — tells the caller what payment shape /shorten will accept."""
+    return {
+        "payment_enabled": PAYMENT_ENABLED,
+        "facilitator_url": os.getenv("FACILITATOR_URL", ""),
+        "service_wallet": os.getenv("SERVICE_WALLET_ADDRESS", ""),
+        "sbc_contract": os.getenv("SBC_CONTRACT_ADDRESS", ""),
+        "shorten_fee": int(os.getenv("SHORTEN_FEE", "1000")),
+        "network": os.getenv("NETWORK_CAIP2", "eip155:72344"),
+    }
 
 
+# ---------------------------------------------------------------------------
+# /{code} — redirect
+# ---------------------------------------------------------------------------
 @app.get("/{code}")
 async def redirect_url(code: str):
-    # 1. Try Redis (cache hit)
     if redis_client:
         try:
             url = await redis_client.get(f"url:{code}")
@@ -331,9 +383,8 @@ async def redirect_url(code: str):
                 CACHE_HITS.inc()
                 return RedirectResponse(url=url, status_code=302)
         except Exception:
-            pass  # Redis down — fall through to Postgres
+            pass  # Redis down — fall through to Postgres.
 
-    # 2. Postgres fallback
     CACHE_MISSES.inc()
     if db_pool is None:
         raise HTTPException(503, "Database unavailable")
@@ -345,8 +396,6 @@ async def redirect_url(code: str):
         raise HTTPException(404, f"Code '{code}' not found")
 
     url = row["url"]
-
-    # Re-warm cache (best-effort)
     if redis_client:
         try:
             await redis_client.setex(f"url:{code}", REDIS_TTL, url)

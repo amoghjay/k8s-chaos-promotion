@@ -9,11 +9,17 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Radius](https://img.shields.io/badge/Radius-Testnet-000000?logoColor=white)
 
-> **Staging can't promote to production unless the app survives chaos.**
+> Promotion that earns trust, not just passes tests.
 
-A GitOps promotion pipeline on GKE where every staging → prod promotion is gated by live chaos experiments — pod kills, network latency, RPC failures — measured quantitatively on Grafana. The app is a pay-per-use URL shortener that settles micropayments on the **Radius testnet** (EVM, chain 72344) on every request.
+A Kubernetes platform where every staging→production promotion is **automatically gated by live chaos engineering**. If the running workload can't survive engineered failure — pod kills, network latency, payment-path degradation — the gate stays closed. No human approval can override it; the metrics either hold under chaos or they don't.
 
-Built to answer a question that matters in production: *how do you know a deployment is actually safe before it reaches users?*
+Built on **GKE + Terraform + ArgoCD + Kargo + Chaos Mesh**, with the test workload running **x402** — the HTTP-native payment standard for agentic APIs — settling micropayments on Radius testnet on every request. The application is intentionally minimal (a paid URL shortener); the platform underneath it is the deliverable.
+
+---
+
+## Why this exists
+
+Most CD pipelines answer *"did the unit tests pass?"* This one answers *"did the system survive reality?"* Chaos isn't a separate exercise you run on Tuesdays — it's the same gate your code passes through on its way to users.
 
 ---
 
@@ -46,7 +52,8 @@ Chaos Mesh injects faults into staging while a k6 load generator runs continuous
 | Secrets | External Secrets Operator → GCP Secret Manager |
 | CI | GitHub Actions (keyless OIDC — no stored credentials) |
 | App | FastAPI + Redis + Postgres |
-| On-chain settlement | Radius testnet — SBC (ERC-20, 6 decimals) via web3.py |
+| Payment protocol | **x402 v2** — HTTP-native, signature-based |
+| On-chain settlement | Radius testnet — SBC via **Permit2**, settled by the Radius first-party x402 facilitator (atomic, gas-sponsored) |
 
 ---
 
@@ -54,36 +61,41 @@ Chaos Mesh injects faults into staging while a k6 load generator runs continuous
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | FastAPI app — x402-style payment flow on Radius testnet | ✅ Done |
+| 1 | FastAPI app — paid `/shorten`, payment-gated on Radius testnet | ✅ Done |
 | 2 | Terraform — GKE, GAR, IAM, Workload Identity | ✅ Done |
 | 3 | Helm chart — multi-env overlays, ESO secrets | ✅ Done |
 | 4 | ArgoCD App-of-Apps + Kargo promotion pipeline | ✅ Done |
 | 5 | Observability — Prometheus, Loki, Grafana + k6 load generator | ✅ Done |
 | 5.5 | Signer-backed real-payment loadgen on Radius testnet | ✅ Done |
-| 6 | Chaos Mesh experiments | 🔄 In Progress |
+| **x402** | **Migrate payment path to x402 Permit2 + Radius first-party facilitator** | **🔄 M0–M4 of 7** |
+| 6 | Chaos Mesh experiments (against post-x402 architecture) | 🔜 |
 | 7 | Chaos as Kargo verification gate | 🔜 |
 | 8 | Demo script + write-up | 🔜 |
 
-Current focus after Phase 5.5: bootstrap Chaos Mesh into staging, add repeatable fault experiments against the live signer-backed traffic path, then promote those checks into the staging verification gate before prod.
+Current focus: finish the x402 migration (Grafana dashboard rewrites, staging bake, legacy schema cleanup), then bootstrap Chaos Mesh against the new architecture. Migration design + spike results in [`docs/design/x402-migration.md`](docs/design/x402-migration.md).
 
 ---
 
 ## Payment flow
 
-Every `POST /shorten` requires an on-chain SBC payment:
+Every `POST /shorten` requires payment, settled via **x402 v2** on Radius. The app itself never touches the chain — settlement goes through the Radius first-party facilitator over HTTPS.
 
 ```
-1. Client calls POST /shorten  →  app returns HTTP 402
-   { pay_to: "0xSERVICE...", amount: 1000, token: "SBC", chain_id: 72344 }
+1. Client calls POST /shorten (no header)
+     →  app returns HTTP 402 with the PAYMENT-REQUIRED header
+        (base64 JSON: price, network=eip155:72344, payTo, assetTransferMethod=permit2)
 
-2. Client sends SBC transfer on Radius testnet  →  gets tx_hash
+2. Client asks the signer service for a Permit2 authorization
+     →  signer returns {signature, permit2Authorization}  (off-chain only — no tx)
 
-3. Client retries POST /shorten with tx_hash
-   →  app verifies Transfer event via eth_getTransactionReceipt
-   →  HTTP 201, short code returned
+3. Client retries POST /shorten with the PAYMENT-SIGNATURE header
+     →  app POSTs to facilitator /verify, then /settle
+     →  facilitator submits ONE atomic on-chain tx via x402ExactPermit2Proxy
+        (Permit2 pulls SBC from payer → service wallet; facilitator pays gas)
+     →  HTTP 201 + PAYMENT-RESPONSE header (settlement tx hash, payer address)
 ```
 
-No Radius SDK — uses standard EVM JSON-RPC via web3.py. Works on any EVM chain with a single RPC URL change.
+Architectural split (matters for chaos): three services with non-overlapping responsibilities — **signer** holds keys and produces signatures, **app** holds the payment policy and calls the facilitator, **facilitator** does the on-chain work and pays gas. The app's `web3` dependency is gone entirely; settlement is two HTTP calls.
 
 ---
 
@@ -127,7 +139,6 @@ scripts/
   test-payment-flow.sh      Manual end-to-end payment verification
 kubernetes/jobs/scripts/
   loadgen.js                k6 chaos load generator source
-  radius-tps-bench.js       k6 Radius TPS benchmark source
 .github/workflows/
   build-push.yaml           CI — build → sign → push to GAR (keyless OIDC)
 ```
@@ -175,6 +186,6 @@ The load generator itself is a light stress test of the Radius RPC — `eth_getT
 
 ---
 
-## Why this project
+## Background
 
-During my co-op at Radius I built the payment settlement infrastructure — RPC endpoints, on-chain transaction flows, service accounts. This project builds on top of that work. The chaos gate is the interesting part: a deployment that can't prove resilience under fault injection doesn't reach production. Chaos is the gate, not an afterthought.
+During my co-op at Radius I built the payment settlement infrastructure — RPC endpoints, on-chain transaction flows, service accounts. This project builds on top of that work; the chaos-as-promotion-gate mechanic is the platform-engineering layer on top.
