@@ -5,6 +5,7 @@ namespace: url-shortener-staging
 
 resources:
   - external-secret-loadgen.yaml
+  - external-secret-signer.yaml
   - radius-signer.yaml
   - loadgen-job.yaml
 

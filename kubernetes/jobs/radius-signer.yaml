@@ -34,12 +34,12 @@ spec:
             - name: RPC_URL
               valueFrom:
                 secretKeyRef:
-                  name: url-shortener-staging-secret
-                  key: RADIUS_RPC_URL
+                  name: radius-signer-secret
+                  key: RPC_URL
             - name: SERVICE_WALLET_ADDRESS
               valueFrom:
                 secretKeyRef:
-                  name: url-shortener-staging-secret
+                  name: radius-signer-secret
                   key: SERVICE_WALLET_ADDRESS
             - name: WALLET_KEY_1
               valueFrom:
