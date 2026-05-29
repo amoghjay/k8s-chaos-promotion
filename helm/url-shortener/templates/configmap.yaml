@@ -12,7 +12,9 @@ data:
   REDIS_URL: {{ printf "redis://%s:6379" (include "url-shortener.redisHost" .) | quote }}
   SBC_CONTRACT_ADDRESS: {{ .Values.radius.sbcContractAddress | quote }}
   SHORTEN_FEE: {{ .Values.radius.shortenFee | quote }}
-  RPC_TIMEOUT_SECONDS: {{ .Values.radius.rpcTimeoutSeconds | quote }}
+  FACILITATOR_URL: {{ .Values.radius.facilitatorUrl | quote }}
+  NETWORK_CAIP2: {{ .Values.radius.networkCaip2 | quote }}
+  FACILITATOR_TIMEOUT_SECONDS: {{ .Values.radius.facilitatorTimeoutSeconds | quote }}
   RADIUS_CHAIN_ID: {{ .Values.radius.chainId | quote }}
   {{- if and .Values.radius.enabled (not .Values.externalSecrets.enabled) }}
   SERVICE_WALLET_ADDRESS: {{ required "radius.serviceWalletAddress is required for local dev" .Values.radius.serviceWalletAddress | quote }}

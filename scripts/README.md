@@ -130,7 +130,7 @@ kubectl logs -f job/loadgen -n url-shortener-staging
 
 ArgoCD / Kustomize notes:
 - `kubernetes/jobs/kustomization.yaml` is the source ArgoCD should point at.
-- `kubernetes/jobs/scripts/loadgen.js` and `kubernetes/jobs/scripts/radius-tps-bench.js` are the canonical script sources.
-- Kustomize generates the `ConfigMap`s from those files automatically.
+- `kubernetes/jobs/scripts/loadgen.js` is the canonical script source.
+- Kustomize generates the `ConfigMap` from that file automatically.
 - `radius-signer` is deployed from the same Kustomize package and reuses `loadgen-wallet-secret`.
-- Update the `images:` section in `kustomization.yaml` to immutable `sha-<short>` tags or digests for both `radius-signer` and `k6-ethereum`.
+- Update the `images:` section in `kustomization.yaml` to an immutable `sha-<short>` tag or digest for `radius-signer`.

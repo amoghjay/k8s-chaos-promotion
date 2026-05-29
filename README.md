@@ -52,7 +52,8 @@ Chaos Mesh injects faults into staging while a k6 load generator runs continuous
 | Secrets | External Secrets Operator → GCP Secret Manager |
 | CI | GitHub Actions (keyless OIDC — no stored credentials) |
 | App | FastAPI + Redis + Postgres |
-| On-chain settlement | Radius testnet — SBC (ERC-20, 6 decimals) via web3.py |
+| Payment protocol | **x402 v2** — HTTP-native, signature-based |
+| On-chain settlement | Radius testnet — SBC via **Permit2**, settled by the Radius first-party x402 facilitator (atomic, gas-sponsored) |
 
 ---
 
@@ -60,36 +61,41 @@ Chaos Mesh injects faults into staging while a k6 load generator runs continuous
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | FastAPI app — x402-style payment flow on Radius testnet | ✅ Done |
+| 1 | FastAPI app — paid `/shorten`, payment-gated on Radius testnet | ✅ Done |
 | 2 | Terraform — GKE, GAR, IAM, Workload Identity | ✅ Done |
 | 3 | Helm chart — multi-env overlays, ESO secrets | ✅ Done |
 | 4 | ArgoCD App-of-Apps + Kargo promotion pipeline | ✅ Done |
 | 5 | Observability — Prometheus, Loki, Grafana + k6 load generator | ✅ Done |
 | 5.5 | Signer-backed real-payment loadgen on Radius testnet | ✅ Done |
-| 6 | Chaos Mesh experiments | 🔄 In Progress |
+| **x402** | **Migrate payment path to x402 Permit2 + Radius first-party facilitator** | **🔄 M0–M4 of 7** |
+| 6 | Chaos Mesh experiments (against post-x402 architecture) | 🔜 |
 | 7 | Chaos as Kargo verification gate | 🔜 |
 | 8 | Demo script + write-up | 🔜 |
 
-Current focus after Phase 5.5: bootstrap Chaos Mesh into staging, add repeatable fault experiments against the live signer-backed traffic path, then promote those checks into the staging verification gate before prod.
+Current focus: finish the x402 migration (Grafana dashboard rewrites, staging bake, legacy schema cleanup), then bootstrap Chaos Mesh against the new architecture. Migration design + spike results in [`docs/design/x402-migration.md`](docs/design/x402-migration.md).
 
 ---
 
 ## Payment flow
 
-Every `POST /shorten` requires an on-chain SBC payment:
+Every `POST /shorten` requires payment, settled via **x402 v2** on Radius. The app itself never touches the chain — settlement goes through the Radius first-party facilitator over HTTPS.
 
 ```
-1. Client calls POST /shorten  →  app returns HTTP 402
-   { pay_to: "0xSERVICE...", amount: 1000, token: "SBC", chain_id: 72344 }
+1. Client calls POST /shorten (no header)
+     →  app returns HTTP 402 with the PAYMENT-REQUIRED header
+        (base64 JSON: price, network=eip155:72344, payTo, assetTransferMethod=permit2)
 
-2. Client sends SBC transfer on Radius testnet  →  gets tx_hash
+2. Client asks the signer service for a Permit2 authorization
+     →  signer returns {signature, permit2Authorization}  (off-chain only — no tx)
 
-3. Client retries POST /shorten with tx_hash
-   →  app verifies Transfer event via eth_getTransactionReceipt
-   →  HTTP 201, short code returned
+3. Client retries POST /shorten with the PAYMENT-SIGNATURE header
+     →  app POSTs to facilitator /verify, then /settle
+     →  facilitator submits ONE atomic on-chain tx via x402ExactPermit2Proxy
+        (Permit2 pulls SBC from payer → service wallet; facilitator pays gas)
+     →  HTTP 201 + PAYMENT-RESPONSE header (settlement tx hash, payer address)
 ```
 
-No Radius SDK — uses standard EVM JSON-RPC via web3.py. Works on any EVM chain with a single RPC URL change.
+Architectural split (matters for chaos): three services with non-overlapping responsibilities — **signer** holds keys and produces signatures, **app** holds the payment policy and calls the facilitator, **facilitator** does the on-chain work and pays gas. The app's `web3` dependency is gone entirely; settlement is two HTTP calls.
 
 ---
 
@@ -133,7 +139,6 @@ scripts/
   test-payment-flow.sh      Manual end-to-end payment verification
 kubernetes/jobs/scripts/
   loadgen.js                k6 chaos load generator source
-  radius-tps-bench.js       k6 Radius TPS benchmark source
 .github/workflows/
   build-push.yaml           CI — build → sign → push to GAR (keyless OIDC)
 ```

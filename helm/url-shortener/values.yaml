@@ -27,11 +27,12 @@ app:
 
 radius:
   enabled: false
-  rpcUrl: ""
+  facilitatorUrl: "https://facilitator.testnet.radiustech.xyz"
+  networkCaip2: "eip155:72344"
   serviceWalletAddress: ""
   sbcContractAddress: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
   shortenFee: "1000"
-  rpcTimeoutSeconds: "10"
+  facilitatorTimeoutSeconds: "30"
   chainId: "72344"
 
 postgresql:
@@ -69,5 +70,4 @@ externalSecrets:
   enabled: false                          # true in dev/staging/prod — false for local dev without ESO
   secretStoreName: "gcp-secret-manager"
   secretStoreKind: "ClusterSecretStore"
-  radiusRpcUrlSecret: "radius-rpc-url-testnet"       # GCP Secret Manager key name
   serviceWalletSecret: "service-wallet-address-testnet"

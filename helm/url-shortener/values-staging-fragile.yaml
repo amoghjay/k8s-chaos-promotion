@@ -3,7 +3,9 @@
 #
 # Makes the app brittle in three ways:
 # 1. Single replica + no PDB → one pod kill takes the whole app down
-# 2. rpcTimeoutSeconds: "2" → payment RPC times out under Chaos Mesh network latency injection
+# 2. facilitatorTimeoutSeconds: "2" → facilitator calls time out under Chaos Mesh
+#    network-latency injection (replaces the old rpcTimeoutSeconds knob — under
+#    x402, the app's only outbound chain dependency is the facilitator)
 # 3. No persistence → data lost on pod restart, amplifying chaos blast radius
 
 replicaCount: 1
@@ -14,7 +16,7 @@ podDisruptionBudget:
   enabled: false
 
 radius:
-  rpcTimeoutSeconds: "2"      # times out under 3s+ network latency injection
+  facilitatorTimeoutSeconds: "2"      # times out under 3s+ network latency injection
 
 postgresql:
   primary:

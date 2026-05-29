@@ -234,7 +234,7 @@ header = base64(JSON.stringify({x402Version: 2, ..., payload: {signature, permit
 app.POST(/shorten, body: {url}, header: PAYMENT-SIGNATURE) → 201
 ```
 
-The base64 wrap is plain JS — no xk6 extension work needed. xk6-ethereum stays installed but is unused on the hot path. We could remove the custom k6 image entirely once the migration is done, but I'd defer that to a follow-on cleanup.
+The base64 wrap is plain JS via `k6/encoding` — no xk6 extension work needed. The custom xk6-ethereum image and the `radius-tps-bench` job that depended on it were removed during the M4 cleanup pass; loadgen now runs on stock `grafana/k6:latest`.
 
 ## 5. Data model
 
@@ -366,7 +366,7 @@ Why not parallel-route everywhere: it doubles the surface area for chaos testing
 ## 11. Out of scope
 
 - Self-hosting the facilitator. Deferred — Radius's hosted facilitator is fine for a portfolio project. Revisit only if it goes down during a demo.
-- Removing the custom k6 image. Possible follow-on once xk6-ethereum is unused on the hot path. Not blocking.
+- ~~Removing the custom k6 image.~~ **Done during M4** — `docker/k6-ethereum/`, `kubernetes/jobs/radius-tps-bench-job.yaml`, `kubernetes/jobs/scripts/radius-tps-bench.js`, and `.github/workflows/build-k6-ethereum.yaml` were all deleted; loadgen runs on stock `grafana/k6:latest`.
 - The "agent pays" demo flow (curl + CLI signer). Out of scope for the migration itself but cheap to add later because the signer's contract is now clean.
 
 ## 12. Implementation sequencing
