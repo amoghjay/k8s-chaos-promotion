@@ -9,11 +9,17 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Radius](https://img.shields.io/badge/Radius-Testnet-000000?logoColor=white)
 
-> **Staging can't promote to production unless the app survives chaos.**
+> Promotion that earns trust, not just passes tests.
 
-A GitOps promotion pipeline on GKE where every staging → prod promotion is gated by live chaos experiments — pod kills, network latency, RPC failures — measured quantitatively on Grafana. The app is a pay-per-use URL shortener that settles micropayments on the **Radius testnet** (EVM, chain 72344) on every request.
+A Kubernetes platform where every staging→production promotion is **automatically gated by live chaos engineering**. If the running workload can't survive engineered failure — pod kills, network latency, payment-path degradation — the gate stays closed. No human approval can override it; the metrics either hold under chaos or they don't.
 
-Built to answer a question that matters in production: *how do you know a deployment is actually safe before it reaches users?*
+Built on **GKE + Terraform + ArgoCD + Kargo + Chaos Mesh**, with the test workload running **x402** — the HTTP-native payment standard for agentic APIs — settling micropayments on Radius testnet on every request. The application is intentionally minimal (a paid URL shortener); the platform underneath it is the deliverable.
+
+---
+
+## Why this exists
+
+Most CD pipelines answer *"did the unit tests pass?"* This one answers *"did the system survive reality?"* Chaos isn't a separate exercise you run on Tuesdays — it's the same gate your code passes through on its way to users.
 
 ---
 
@@ -175,6 +181,6 @@ The load generator itself is a light stress test of the Radius RPC — `eth_getT
 
 ---
 
-## Why this project
+## Background
 
-During my co-op at Radius I built the payment settlement infrastructure — RPC endpoints, on-chain transaction flows, service accounts. This project builds on top of that work. The chaos gate is the interesting part: a deployment that can't prove resilience under fault injection doesn't reach production. Chaos is the gate, not an afterthought.
+During my co-op at Radius I built the payment settlement infrastructure — RPC endpoints, on-chain transaction flows, service accounts. This project builds on top of that work; the chaos-as-promotion-gate mechanic is the platform-engineering layer on top.
