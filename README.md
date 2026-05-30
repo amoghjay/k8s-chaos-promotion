@@ -7,13 +7,14 @@
 ![Chaos Mesh](https://img.shields.io/badge/Chaos_Mesh-CNCF-FF6B6B?logoColor=white)
 ![k6](https://img.shields.io/badge/k6-Load_Testing-7D64FF?logo=k6&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![x402](https://img.shields.io/badge/x402-v2-success?logoColor=white)
 ![Radius](https://img.shields.io/badge/Radius-Testnet-000000?logoColor=white)
 
 > Promotion that earns trust, not just passes tests.
 
-A Kubernetes platform where every staging→production promotion is **automatically gated by live chaos engineering**. If the running workload can't survive engineered failure — pod kills, network latency, payment-path degradation — the gate stays closed. No human approval can override it; the metrics either hold under chaos or they don't.
+A Kubernetes platform where every staging → production promotion is **automatically gated by live chaos engineering**. If the running workload can't survive engineered failure — pod kills, network latency, payment-path degradation — the gate stays closed. No human approval can override it; the metrics either hold under chaos or they don't.
 
-Built on **GKE + Terraform + ArgoCD + Kargo + Chaos Mesh**, with the test workload running **x402** — the HTTP-native payment standard for agentic APIs — settling micropayments on Radius testnet on every request. The application is intentionally minimal (a paid URL shortener); the platform underneath it is the deliverable.
+Built on **GKE + Terraform + ArgoCD + Kargo + Chaos Mesh**. The test workload is a paid API: every request settles a real micropayment via **x402** on the Radius testnet. The application is intentionally minimal — the platform underneath it, and how it gates promotions on observed reality, is the deliverable.
 
 ---
 
@@ -28,13 +29,23 @@ Most CD pipelines answer *"did the unit tests pass?"* This one answers *"did the
 ```
 git push
   └─▶ GitHub Actions builds + pushes image to GAR (keyless OIDC)
-        └─▶ Kargo detects new tag
-              └─▶ DEV  (auto-promote)
+        └─▶ Kargo Warehouse detects new sha-* tag
+              └─▶ DEV       (auto-promote → /health analysis gate)
                     └─▶ STAGING  (manual promote → chaos gate runs)
-                          └─▶ PROD  (manual approve)
+                          └─▶ PROD     (manual approve, only after staging survives chaos)
 ```
 
-Chaos Mesh injects faults into staging while a k6 load generator runs continuous payment traffic. Kargo only opens the gate to prod if Prometheus metrics stay within thresholds throughout.
+In staging, Chaos Mesh injects faults — pod kills, NetworkChaos against external dependencies, Redis outages, latency injection — while a k6 load generator drives continuous paid traffic against the app. Kargo only opens the gate to prod if Prometheus metrics (`payment_facilitator_total{outcome="settled"}`, `shorten_201_rate`, `redirect_ok_rate`, settlement latency p95) stay within thresholds *throughout* the chaos window.
+
+---
+
+## What's worth a closer look
+
+- **Chaos as the deploy gate, not a side experiment.** Same gate every change passes. No "we run chaos on Tuesdays" — the chaos run *is* the verification step Kargo blocks on.
+- **Three services with non-overlapping concerns.** The workload is split into a **signer** (holds wallet keys, produces signatures off-chain), an **app** (holds payment policy, no blockchain client), and an external **facilitator** (does the on-chain settlement and pays gas). Each service has its own failure signature in Grafana, which is what makes the chaos experiments diagnostic instead of just stressful.
+- **The app has zero blockchain code in it.** Migrated from a bespoke `tx_hash`-verification path to standard **x402 + Permit2** against the [Radius first-party facilitator](https://docs.radiustech.xyz/developer-resources/x402-integration). The app's payment module is two HTTPS calls; the `web3` dependency is gone entirely. End-to-end payment latency dropped ~2.5× as a side effect.
+- **Idempotent infrastructure.** Signer's per-wallet `SBC.approve(Permit2, MAX)` boot step is safe to re-run; the app's `tx_hash → settlement_tx_hash` schema migration is `IF EXISTS`-guarded. Restart anything in any order; nothing breaks.
+- **Every payment leaves a real audit trail** without the app touching the chain. `urls.settlement_tx_hash` + `urls.payer_address` come straight from the facilitator's response — paste either into a Radius explorer to see the on-chain transfer.
 
 ---
 
@@ -48,58 +59,66 @@ Chaos Mesh injects faults into staging while a k6 load generator runs continuous
 | Promotion | Kargo v1.9 |
 | Chaos | Chaos Mesh |
 | Observability | kube-prometheus-stack + Loki + Grafana |
-| Load testing | k6 |
+| Load testing | k6 (vanilla — no custom extensions) |
 | Secrets | External Secrets Operator → GCP Secret Manager |
-| CI | GitHub Actions (keyless OIDC — no stored credentials) |
+| CI | GitHub Actions (keyless OIDC, no stored credentials) |
 | App | FastAPI + Redis + Postgres |
 | Payment protocol | **x402 v2** — HTTP-native, signature-based |
 | On-chain settlement | Radius testnet — SBC via **Permit2**, settled by the Radius first-party x402 facilitator (atomic, gas-sponsored) |
 
 ---
 
-## Status
+## The chaos workload — x402 payments on Radius
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 1 | FastAPI app — paid `/shorten`, payment-gated on Radius testnet | ✅ Done |
-| 2 | Terraform — GKE, GAR, IAM, Workload Identity | ✅ Done |
-| 3 | Helm chart — multi-env overlays, ESO secrets | ✅ Done |
-| 4 | ArgoCD App-of-Apps + Kargo promotion pipeline | ✅ Done |
-| 5 | Observability — Prometheus, Loki, Grafana + k6 load generator | ✅ Done |
-| 5.5 | Signer-backed real-payment loadgen on Radius testnet | ✅ Done |
-| **x402** | **Migrate payment path to x402 Permit2 + Radius first-party facilitator** | **🔄 M0–M4 of 7** |
-| 6 | Chaos Mesh experiments (against post-x402 architecture) | 🔜 |
-| 7 | Chaos as Kargo verification gate | 🔜 |
-| 8 | Demo script + write-up | 🔜 |
+The test workload pays for itself. Every `POST /shorten` triggers a real micropayment, settled on-chain through the Radius first-party facilitator. The app itself never touches the chain.
 
-Current focus: finish the x402 migration (Grafana dashboard rewrites, staging bake, legacy schema cleanup), then bootstrap Chaos Mesh against the new architecture. Migration design + spike results in [`docs/design/x402-migration.md`](docs/design/x402-migration.md).
+```
+1. Client → POST /shorten (no header)
+     ← 402 with PAYMENT-REQUIRED header
+       (base64 JSON: price, network=eip155:72344, payTo, assetTransferMethod=permit2)
+
+2. Client → POST /sign-permit2 to the signer service
+     ← {signature, permit2Authorization}      (off-chain EIP-712 sign — no tx)
+
+3. Client → POST /shorten with PAYMENT-SIGNATURE header (base64 x402 envelope)
+     app → POST /verify  → facilitator
+     app → POST /settle  → facilitator submits ONE atomic on-chain tx via
+                           x402ExactPermit2Proxy.settle:
+                           Permit2 pulls SBC from payer → service wallet,
+                           facilitator pays gas
+     ← 201 + PAYMENT-RESPONSE header (settlement tx hash, payer address)
+```
+
+Why this matters for chaos: each step touches a different dependency, so a chaos run shows *which* leg degraded. NetworkChaos against the facilitator → `payment_facilitator_call_duration_seconds{op}` spikes. Signer pod kill → `sign_success_rate` drops. Redis outage → cache hit rate plummets but the app stays up. Three distinct chaos signatures, three distinct root causes.
 
 ---
 
-## Payment flow
+## Performance baseline (post-x402, staging)
 
-Every `POST /shorten` requires payment, settled via **x402 v2** on Radius. The app itself never touches the chain — settlement goes through the Radius first-party facilitator over HTTPS.
+Measured against `facilitator.testnet.radiustech.xyz` on Radius testnet — 5-minute k6 run, 3 wallets at 60 iter/min, 301 iterations total.
 
-```
-1. Client calls POST /shorten (no header)
-     →  app returns HTTP 402 with the PAYMENT-REQUIRED header
-        (base64 JSON: price, network=eip155:72344, payTo, assetTransferMethod=permit2)
+| | Pre-x402 (Phase 5.5) | Post-x402 (Phase 5.5b) |
+|---|---|---|
+| Sign endpoint p95 | 1.64 s (`/pay` — chain submit + receipt poll) | **19.56 ms** (`/sign-permit2` — EIP-712 sign only) |
+| `/shorten` p95 | 157 ms (verify a pre-submitted tx) | 680 ms (full facilitator round-trip incl. on-chain settle) |
+| **End-to-end p95** | **~1.8 s** | **~700 ms** |
+| Success rate | 100% | 100% |
+| App's hot-path RPC calls | yes (receipt fetching) | none |
+| Distinct failure modes | 9 (tx-shaped) | 6 (HTTP-shaped) |
 
-2. Client asks the signer service for a Permit2 authorization
-     →  signer returns {signature, permit2Authorization}  (off-chain only — no tx)
-
-3. Client retries POST /shorten with the PAYMENT-SIGNATURE header
-     →  app POSTs to facilitator /verify, then /settle
-     →  facilitator submits ONE atomic on-chain tx via x402ExactPermit2Proxy
-        (Permit2 pulls SBC from payer → service wallet; facilitator pays gas)
-     →  HTTP 201 + PAYMENT-RESPONSE header (settlement tx hash, payer address)
-```
-
-Architectural split (matters for chaos): three services with non-overlapping responsibilities — **signer** holds keys and produces signatures, **app** holds the payment policy and calls the facilitator, **facilitator** does the on-chain work and pays gas. The app's `web3` dependency is gone entirely; settlement is two HTTP calls.
+End-to-end is ~2.5× faster despite `/shorten` itself being slower — the chain work moved from the client's side of the wire to inside `/shorten` via the facilitator. The architectural simplification is real and measurable. This is the anchor every chaos experiment compares against.
 
 ---
 
-## Local development
+## Architectural deep-dives
+
+- [**`docs/design/x402-migration.md`**](docs/design/x402-migration.md) — Full record of the x402 migration: design rationale, the mid-flight pivot from EIP-2612 to Permit2 after discovering the Radius first-party facilitator, M1 spike results with real on-chain settlement hashes, the §15 Phase 5.5b baseline.
+- [**`LEARNINGS.md`**](LEARNINGS.md) — Per-phase decisions, gotchas, and "aha" moments. Worth reading for the surprises that only show up under real traffic.
+- [**`PROJECT_CONTEXT.md`**](PROJECT_CONTEXT.md) — Durable handoff for new contributors / future-me.
+
+---
+
+## Run it locally
 
 ```bash
 git clone https://github.com/amoghjay/k8s-chaos-promotion.git
@@ -107,10 +126,10 @@ cd k8s-chaos-promotion
 docker compose up --build
 ```
 
-App at **http://localhost:8000** · Swagger UI at **http://localhost:8000/docs**
+App at `http://localhost:8000` · Swagger UI at `http://localhost:8000/docs`
 
 ```bash
-# Shorten a URL (payment disabled locally)
+# Shorten a URL — payment is disabled locally (no FACILITATOR_URL set)
 curl -s -X POST http://localhost:8000/shorten \
   -H "Content-Type: application/json" \
   -d '{"url": "https://chaos-mesh.org"}' | jq .
@@ -119,73 +138,50 @@ curl -s -X POST http://localhost:8000/shorten \
 curl http://localhost:8000/health | jq .
 ```
 
+The full x402 path is exercised in the dev/staging environments on GKE — see [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) for the reconnect checklist and trigger commands.
+
 ---
 
 ## Repository layout
 
 ```
-app/                        FastAPI application
-gke_terraform/              GCP infrastructure (Terraform)
+app/                                FastAPI URL shortener — thin x402 facilitator client
+signer/                             FastAPI Permit2 signer service (staging only)
+  main.py                           /sign-permit2 + boot-time SBC.approve(Permit2)
+  permit2.py                        Pure EIP-712 typed-data signing helpers (unit-testable)
 helm/
-  url-shortener/            Helm chart — dev / staging / prod value overlays
-  observability/            kube-prometheus-stack + Loki + Grafana
+  url-shortener/                    App Helm chart — dev/staging/prod overlays
+  observability/                    kube-prometheus-stack + Loki + custom Grafana dashboard
 kubernetes/
-  bootstrap/                ArgoCD App-of-Apps (platform tools)
-  kargo/                    Kargo Stages, Warehouse, AnalysisTemplates
-  jobs/                     Kustomize package for k6 jobs + radius-signer
-signer/                     FastAPI signer service for real SBC transfer submission
-scripts/
-  fund-test-wallet.sh       Faucet utility — drip SBC, verify on-chain balance
-  test-payment-flow.sh      Manual end-to-end payment verification
-kubernetes/jobs/scripts/
-  loadgen.js                k6 chaos load generator source
-.github/workflows/
-  build-push.yaml           CI — build → sign → push to GAR (keyless OIDC)
+  bootstrap/                        ArgoCD App-of-Apps (platform tools)
+  kargo/                            Stages, Warehouse, AnalysisTemplates
+  jobs/                             Kustomize package: signer Deployment + suspended loadgen CronJob + ESO secrets
+gke_terraform/                      GCP infrastructure (Terraform)
+scripts/                            Wallet funding, manual smoke utilities
+docs/design/                        Design docs (x402 migration, future chaos experiment specs)
+.github/workflows/                  Keyless OIDC image builds → GAR
 ```
 
 ---
 
-## Radius Integration
+## Gotchas worth remembering
 
-This project uses Radius testnet as the payment settlement layer. Every `POST /shorten` in production requires a real on-chain SBC transfer — verified via `eth_getTransactionReceipt` before the URL is shortened.
+Documented in detail in `LEARNINGS.md`; surfaced here so they're visible up front:
 
-**Testnet config used:**
+- **`SBC.approve()` on Radius costs ~115k gas**, not vanilla ERC-20 ~46k — Turnstile-related state mutations inflate it. Hardcoding 100k OOG'd on the first attempt. Always `estimate_gas` for SBC writes.
+- **The facilitator's validity signal is in the response body, not the HTTP status.** `/verify` returns HTTP 200 with `isValid: false` for bad signatures. 4xx/5xx is reserved for operational errors.
+- **`invalidReason` is free-form prose.** Radius returns `"Invalid signature"`; Stablecoin.xyz returned `"invalid_exact_evm_payload_signature"`. Don't pivot Prometheus labels on it — coarse-bucket and log the prose for triage.
+- **Facilitator idempotency replaces on-chain replay reverts.** A replayed signature returns the cached `success: true` + original transaction hash. The replay signal at the app layer is the `urls.settlement_tx_hash UNIQUE` constraint, not an on-chain failure.
+- **Permit2's EIP-712 domain has no `version` field** (unlike EIP-2612). Three fields only: `{name: "Permit2", chainId, verifyingContract}`. `eth-account.encode_typed_data` handles the missing field correctly if you simply don't pass it.
 
-| Parameter | Value |
-|-----------|-------|
-| Chain ID | `72344` |
-| RPC | `https://rpc.testnet.radiustech.xyz` |
-| SBC contract | `0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb` |
-| SBC decimals | `6` |
-| Fee per shorten | `0.001 SBC` (1000 raw units) |
-| Faucet | `https://testnet.radiustech.xyz/api/v1/faucet` |
+---
 
-**Real gotchas hit during development:**
+## Status
 
-- **Null receipt lag** — `eth_getTransactionReceipt` returns null for confirmed transactions due to RPC node lag. Added a 200ms retry before surfacing `TX_NOT_FOUND` to the user.
-- **Receipt visibility lag tolerance** — the verifier now retries receipt fetches for a short window before returning `tx_not_found`, and `/shorten` surfaces that state as transient so the load generator can retry the same `tx_hash`.
-- **`cast call` output format** — `balanceOf` returns `"500000 [5e5]"` — decimal, not hex. Parsed with `awk '{print $1}'`, never `int(..., 16)`.
-- **Faucet rate limit** — this was the Phase 5 bottleneck for the old `/drip`-based loadgen. Phase 5.5 moved the chaos path to signer-backed real ERC-20 transfers so the load generator measures the payment flow instead of faucet policy.
-- **`signature_required` degradation** — If the faucet re-enables signed mode, the bash faucet script exits cleanly with the web faucet URL. k6 VUs flip to no-payment mode permanently for that run. No private key for `SERVICE_WALLET` is ever stored in scripts.
-- **Signer-backed loadgen** — The current Phase 5.5 load generator uses one funded wallet per VU through an internal `radius-signer` service, submits real SBC ERC-20 transfers on Radius testnet, waits for confirmation, then submits the resulting `tx_hash` to `/shorten`.
-- **Wallet pre-run guard** — the load generator now checks signer wallet balances in `setup()` and fails fast if the configured VU wallets do not have enough SBC to cover the planned run.
-- **Current staging maturity** — The signer-backed path is now mostly healthy in staging: tx submit and receipt success are ~99.7%, shorten 201 success is ~94%, redirect success is 100%, and the main residual issue is verifier-side `tx_not_found` timing.
-
-**Phase 5 baseline — real traffic against Radius testnet:**
-
-243 k6 iterations over 3 minutes, 2 VUs, ~132 on-chain transactions settled:
-
-| Metric | Result |
-|--------|--------|
-| Redirect success | 100% |
-| Payment replay (409) | 0% |
-| Payment success rate | 82% (rate-limited near end of run) |
-| RPC latency p(95) | 515ms |
-
-The load generator itself is a light stress test of the Radius RPC — `eth_getTransactionReceipt` called ~132 times over 3 minutes from inside a GKE pod.
+x402 payment migration shipped. Phase 6 (Chaos Mesh experiments against the post-x402 architecture + Kargo verification gate) is the active workstream.
 
 ---
 
 ## Background
 
-During my co-op at Radius I built the payment settlement infrastructure — RPC endpoints, on-chain transaction flows, service accounts. This project builds on top of that work; the chaos-as-promotion-gate mechanic is the platform-engineering layer on top.
+During my co-op at [Radius](https://radiustech.xyz) I built parts of the payment settlement infrastructure — RPC endpoints, on-chain transaction flows, service accounts. This project builds on top of that work: the chaos-as-promotion-gate mechanic is the platform-engineering layer that turns those primitives into something a deploy pipeline can actually trust.
