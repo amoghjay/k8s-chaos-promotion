@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chaos-mesh
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"   # after observability (wave 2), before chaos-jobs (wave 5)
+spec:
+  project: default
+  source:
+    repoURL: https://charts.chaos-mesh.org
+    chart: chaos-mesh
+    targetRevision: "2.8.2"
+    helm:
+      values: |
+        # --- GKE Standard runtime fix ---
+        # GKE uses containerd, not docker. Chart defaults to docker → chaos-daemon
+        # CrashLoopBackOffs trying to reach a non-existent docker socket.
+        # (chaos-mesh issues #4232, #4240)
+        chaosDaemon:
+          runtime: containerd
+          socketPath: /run/containerd/containerd.sock
+        controllerManager:
+          # 2-node cluster doesn't need HA. One replica, no leader election.
+          replicaCount: 1
+          leaderElection:
+            enabled: false
+          # --- Blast-radius containment (safety-critical) ---
+          # Fault injection becomes opt-in per namespace. Only namespaces
+          # annotated chaos-mesh.org/inject=enabled can be targeted.
+          enableFilterNamespace: true
+        dashboard:
+          # Keep auth on (this is the chart default; pinned here so it's explicit).
+          securityMode: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chaos-mesh
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
