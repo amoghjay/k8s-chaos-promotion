@@ -41,3 +41,4 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      - ServerSideApply=true   # required — Workflow/Schedule/WorkflowNode CRDs (643KB/852KB/1.3MB) exceed the 262144-byte client-side apply annotation limit. Same fix as kube-prometheus-stack.
