@@ -1,0 +1,24 @@
+---
+# Source: url-shortener/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-shortener-prod-config
+  labels:
+    helm.sh/chart: url-shortener-0.1.0
+    app.kubernetes.io/name: url-shortener
+    app.kubernetes.io/instance: url-shortener-prod
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  BASE_URL: "http://localhost:8080"
+  CODE_LENGTH: "8"
+  REDIS_TTL: "3600"
+  WORKERS: "4"
+  REDIS_URL: "redis://url-shortener-prod-redis-master.url-shortener-prod.svc.cluster.local:6379"
+  SBC_CONTRACT_ADDRESS: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
+  SHORTEN_FEE: "1000"
+  FACILITATOR_URL: "https://facilitator.radiustech.xyz"
+  NETWORK_CAIP2: "eip155:723487"
+  FACILITATOR_TIMEOUT_SECONDS: "30"
+  RADIUS_CHAIN_ID: "723487"
