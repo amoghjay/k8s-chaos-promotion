@@ -52,11 +52,14 @@ spec:
             - secretRef:
                 name: {{ include "url-shortener.fullname" . }}-secret
           livenessProbe:
-            # /health: returns 503 only if Postgres is down.
-            # Redis being down returns 200 (degraded) — intentional, chaos tests
-            # kill Redis to verify the app degrades gracefully without restarting.
+            # /livez: process-only check, NEVER touches Postgres/Redis. Liveness
+            # answers "should k8s restart this process?" — a dependency outage must
+            # fail READINESS (pull from endpoints), not LIVENESS (restart, which
+            # can't fix a downstream DB). Chaos exp #1 proved /health here caused a
+            # cascading-restart outage: a 60s PG blip tripped 3x503 and restarted
+            # every replica. See LEARNINGS.md Phase 6.1.
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
