@@ -12,68 +12,51 @@ spec:
         stages:
           - dev  # only receives freight that has been verified in dev
 
+  # RENDERED-BRANCHES pattern — see stage-dev.yaml for the rationale.
   promotionTemplate:
     spec:
       vars:
         - name: repoURL
           value: https://github.com/amoghjay/k8s-chaos-promotion.git
+        - name: image
+          value: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener
 
       steps:
-        # Step 1: Clone repo, check out main
         - uses: git-clone
           config:
             repoURL: ${{ vars.repoURL }}
             checkout:
-              - branch: main
+              - commit: ${{ commitFrom(vars.repoURL).ID }}
                 path: ./src
-
-        # Step 2: Update image.tag in the env values file
+              - branch: env/${{ ctx.stage }}
+                path: ./out
+                create: true
         - uses: yaml-update
-          as: update-image
           config:
             path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
             updates:
               - key: image.tag
-                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
-
-        # Step 3: Update deployedCommit in config file
-        - uses: yaml-update
+                value: ${{ quote(imageFrom(vars.image).Tag) }}
+        - uses: git-clear
           config:
-            path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
-            updates:
-              - key: deployedCommit
-                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
-
-        # Step 4: Commit both changed files
+            path: ./out
+        - uses: helm-template
+          config:
+            path: ./src/helm/url-shortener
+            releaseName: url-shortener-${{ ctx.stage }}
+            namespace: url-shortener-${{ ctx.stage }}
+            valuesFiles:
+              - ./src/helm/url-shortener/values.yaml
+              - ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
+            outPath: ./out
         - uses: git-commit
+          as: commit
           config:
-            path: ./src
-            message: "chore(${{ ctx.stage }}): promote to ${{ imageFrom('us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener').Tag }}"
-
-        # Step 5: Push to a generated temp branch (not directly to main)
+            path: ./out
+            message: "render ${{ ctx.stage }} @ ${{ imageFrom(vars.image).Tag }}"
         - uses: git-push
-          as: push
           config:
-            path: ./src
-            generateTargetBranch: true
-
-        # Step 6: Open PR from temp branch → main
-        - uses: git-open-pr
-          as: open-pr
-          config:
-            repoURL: ${{ vars.repoURL }}
-            createTargetBranch: false
-            sourceBranch: ${{ outputs.push.branch }}
-            targetBranch: main
-
-        # Step 7: Merge the PR (retries until mergeable)
-        - uses: git-merge-pr
-          config:
-            repoURL: ${{ vars.repoURL }}
-            prNumber: ${{ outputs['open-pr'].pr.id }}
-            wait: true
-
-        # Step 8: Trigger immediate ArgoCD sync after PR merges
+            path: ./out
         - uses: argocd-update
           config:
             apps:
@@ -81,7 +64,8 @@ spec:
                 sources:
                   - repoURL: ${{ vars.repoURL }}
 
-  # Health check after promotion — Phase 7 adds chaos experiments here
+  # Health check after promotion. Phase 6.3 appends `chaos-gate` here (after
+  # health-check) so a freight only reaches prod if it survives the experiments.
   verification:
     analysisTemplates:
       - name: health-check

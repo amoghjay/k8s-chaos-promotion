@@ -11,51 +11,71 @@ spec:
       sources:
         direct: true  # gets freight directly from Warehouse (not from another stage)
 
+  # RENDERED-BRANCHES pattern (Kargo's recommended approach):
+  # promotion RENDERS the chart to plain YAML at the freight's git commit + image
+  # tag, then commits to the env/<stage> branch. ArgoCD apps track env/<stage> and
+  # just apply plain YAML (no in-cluster Helm). A change reaches an env ONLY via a
+  # promotion that re-renders — closing the gate-hole. `main` is never written by
+  # promotions; the env branch IS the deployment record. See LEARNINGS.md §6.1.
   promotionTemplate:
     spec:
       vars:
         - name: repoURL
           value: https://github.com/amoghjay/k8s-chaos-promotion.git
+        - name: image
+          value: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener
 
       steps:
-        # Step 1: Clone repo, check out main
+        # 1. Check out the FREIGHT's git commit (chart+config source) to ./src,
+        #    and the env branch to ./out (created on first run).
         - uses: git-clone
           config:
             repoURL: ${{ vars.repoURL }}
             checkout:
-              - branch: main
+              - commit: ${{ commitFrom(vars.repoURL).ID }}
                 path: ./src
+              - branch: env/${{ ctx.stage }}
+                path: ./out
+                create: true
 
-        # Step 2: Update image.tag in the env values file
+        # 2. Inject the freight's image tag into the WORKING COPY only (never pushed
+        #    to main — main stays human-authored source).
         - uses: yaml-update
-          as: update-image
           config:
             path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
             updates:
               - key: image.tag
-                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
+                value: ${{ quote(imageFrom(vars.image).Tag) }}
 
-        # Step 3: Update deployedCommit in config file
-        - uses: yaml-update
+        # 3. Wipe the previous render so removed resources don't linger.
+        - uses: git-clear
           config:
-            path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
-            updates:
-              - key: deployedCommit
-                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
+            path: ./out
 
-        # Step 4: Commit both changed files
+        # 4. Render the chart to plain YAML (deps vendored in charts/*.tgz, so no
+        #    network pull; validated locally to render cleanly).
+        - uses: helm-template
+          config:
+            path: ./src/helm/url-shortener
+            releaseName: url-shortener-${{ ctx.stage }}
+            namespace: url-shortener-${{ ctx.stage }}
+            valuesFiles:
+              - ./src/helm/url-shortener/values.yaml
+              - ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
+            outPath: ./out
+
+        # 5. Commit + push the rendered manifests to env/<stage> (NOT main).
         - uses: git-commit
+          as: commit
           config:
-            path: ./src
-            message: "chore(dev): promote to ${{ imageFrom('us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener').Tag }}"
-
-        # Step 5: Push directly to main
+            path: ./out
+            message: "render ${{ ctx.stage }} @ ${{ imageFrom(vars.image).Tag }}"
         - uses: git-push
           config:
-            path: ./src
-            targetBranch: main
+            path: ./out
 
-        # Step 6: Trigger immediate ArgoCD sync
+        # 6. Nudge ArgoCD to sync. targetRevision is statically env/<stage> in the
+        #    ApplicationSet, so Kargo never mutates it (no AppSet clobber fight).
         - uses: argocd-update
           config:
             apps:
@@ -63,8 +83,8 @@ spec:
                 sources:
                   - repoURL: ${{ vars.repoURL }}
 
-  # After promotion, verify the app is healthy before marking freight as verified
-  # Staging will only receive freight that passed this check
+  # After promotion, verify health before marking freight verified.
+  # Staging only receives freight that passed this.
   verification:
     analysisTemplates:
       - name: health-check
