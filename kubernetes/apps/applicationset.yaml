@@ -5,20 +5,21 @@ metadata:
   namespace: argocd
 spec:
   # List generator: hardcode the environments.
-  # Kargo does NOT need to know about this — it just pushes commits to main.
-  # ArgoCD detects the changed values file and syncs automatically.
+  # RENDERED-BRANCHES pattern: each env app tracks its OWN env/<env> branch, which
+  # holds PLAIN rendered YAML produced by the Kargo promotion's helm-template step
+  # (values-<env>.yaml is consumed THERE, at render time — see kargo/stage-*.yaml).
+  # ArgoCD never runs Helm; it just applies the rendered manifests. A chart/template/
+  # values change on main reaches an env ONLY when a promotion re-renders to that
+  # branch, so config changes are gated dev->staging->prod like images. LEARNINGS §6.1.
   generators:
     - list:
         elements:
           - env: dev
             namespace: url-shortener-dev
-            valuesFile: values-dev.yaml
           - env: staging
             namespace: url-shortener-staging
-            valuesFile: values-staging.yaml
           - env: prod
             namespace: url-shortener-prod
-            valuesFile: values-prod.yaml
 
   template:
     metadata:
@@ -30,12 +31,13 @@ spec:
       project: default
       source:
         repoURL: https://github.com/amoghjay/k8s-chaos-promotion.git
-        targetRevision: HEAD  # always track main branch HEAD
-        path: helm/url-shortener
-        helm:
-          valueFiles:
-            - values.yaml         # base values (image.repository, defaults)
-            - "{{valuesFile}}"    # env overlay (image.tag managed by Kargo, replicas, resources etc.)
+        targetRevision: env/{{env}}   # per-env rendered branch (static — Kargo never mutates it)
+        path: .                        # plain rendered YAML at the branch root
+        directory:
+          recurse: true                # render nests under url-shortener/templates + charts/*;
+                                       # ArgoCD does NOT recurse by default → without this the
+                                       # apps find 0 manifests at root and prune to empty.
+        # no helm: block — ArgoCD applies pre-rendered manifests, it does not template
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{namespace}}"
