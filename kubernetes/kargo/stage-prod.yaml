@@ -12,67 +12,54 @@ spec:
         stages:
           - staging  # only receives freight that has been verified in staging
 
+  # RENDERED-BRANCHES pattern — see stage-dev.yaml for the rationale.
+  # Prod is a MANUAL gate via ProjectConfig (autoPromotionEnabled: false) — a human
+  # approves the promotion in the Kargo UI before these steps run. That approval IS
+  # the gate, so we no longer need the old git-open-pr / git-wait-for-pr dance.
   promotionTemplate:
     spec:
       vars:
         - name: repoURL
           value: https://github.com/amoghjay/k8s-chaos-promotion.git
+        - name: image
+          value: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener
 
       steps:
-        # Step 1: Clone repo, check out main
         - uses: git-clone
           config:
             repoURL: ${{ vars.repoURL }}
             checkout:
-              - branch: main
+              - commit: ${{ commitFrom(vars.repoURL).ID }}
                 path: ./src
-
-        # Step 2: Update image.tag in the env values file
+              - branch: env/${{ ctx.stage }}
+                path: ./out
+                create: true
         - uses: yaml-update
-          as: update-image
           config:
             path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
             updates:
               - key: image.tag
-                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
-
-        # Step 3: Update deployedCommit in config file
-        - uses: yaml-update
+                value: ${{ quote(imageFrom(vars.image).Tag) }}
+        - uses: git-clear
           config:
-            path: ./src/helm/url-shortener/config-${{ ctx.stage }}.yaml
-            updates:
-              - key: deployedCommit
-                value: ${{ quote(imageFrom("us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener").Tag) }}
-
-        # Step 4: Commit both changed files
+            path: ./out
+        - uses: helm-template
+          config:
+            path: ./src/helm/url-shortener
+            releaseName: url-shortener-${{ ctx.stage }}
+            namespace: url-shortener-${{ ctx.stage }}
+            valuesFiles:
+              - ./src/helm/url-shortener/values.yaml
+              - ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
+            outPath: ./out
         - uses: git-commit
+          as: commit
           config:
-            path: ./src
-            message: "chore(${{ ctx.stage }}): promote to ${{ imageFrom('us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener').Tag }}"
-
-        # Step 5: Push to a generated temp branch (not directly to main)
+            path: ./out
+            message: "render ${{ ctx.stage }} @ ${{ imageFrom(vars.image).Tag }}"
         - uses: git-push
-          as: push
           config:
-            path: ./src
-            generateTargetBranch: true
-
-        # Step 6: Open PR from temp branch → main
-        - uses: git-open-pr
-          as: open-pr
-          config:
-            repoURL: ${{ vars.repoURL }}
-            createTargetBranch: false
-            sourceBranch: ${{ outputs.push.branch }}
-            targetBranch: main
-
-        # Step 7: Wait for manual PR merge — prod is a human gate
-        - uses: git-wait-for-pr
-          config:
-            repoURL: ${{ vars.repoURL }}
-            prNumber: ${{ outputs['open-pr'].pr.id }}
-
-        # Step 8: Trigger immediate ArgoCD sync after PR merges
+            path: ./out
         - uses: argocd-update
           config:
             apps:
@@ -80,5 +67,4 @@ spec:
                 sources:
                   - repoURL: ${{ vars.repoURL }}
 
-  # No verification — prod is a manual gate only
-  # Approval happens in Kargo UI before promotion even starts
+  # No verification — prod is the manual approval gate (Kargo UI) only.

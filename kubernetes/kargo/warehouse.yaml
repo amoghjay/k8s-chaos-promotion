@@ -4,6 +4,11 @@ metadata:
   name: url-shortener
   namespace: url-shortener
 spec:
+  # Combined freight = {image, chart commit}. A new image OR a chart/config change
+  # on main creates promotable freight, so CONFIG changes flow through the same
+  # dev->staging(chaos gate)->prod sequence as image changes. This closes the
+  # gate-hole where Helm template changes used to reach all envs from main HEAD,
+  # ungated. See LEARNINGS.md Phase 6.1 (gate-hole) + docs/design.
   subscriptions:
     - image:
         repoURL: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener
@@ -11,3 +16,11 @@ spec:
         allowTags: ^sha-[a-f0-9]+$           # match sha-<short> tags pushed by CI (e.g. sha-a1b2c3d)
         ignoreTags:
           - latest                           # never treat the mutable latest tag as promotable freight
+    - git:
+        repoURL: https://github.com/amoghjay/k8s-chaos-promotion.git
+        branch: main                         # watch ONLY main (the source) — never env/* branches
+        includePaths:
+          - glob:helm/url-shortener/**       # a chart/values change here = promotable freight
+        # No feedback loop: promotions render+push to env/* branches (not watched),
+        # and never write to main in the combined-freight model, so the Warehouse
+        # never sees its own output as new freight.
