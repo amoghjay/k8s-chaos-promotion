@@ -186,9 +186,23 @@ class ShortenRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Health endpoints
 # ---------------------------------------------------------------------------
+@app.get("/livez")
+async def livez():
+    """Liveness. Process-only — deliberately does NOT touch Postgres or Redis.
+
+    A backing-dependency outage must fail READINESS (pull the pod from Service
+    endpoints), never LIVENESS (restart the pod). Restarting never fixes a
+    downstream DB; it only amplifies the outage. Chaos experiment #1 proved this:
+    when liveness pointed at /health (PG-coupled), a 60s Postgres outage tripped
+    the probe (3x503) and the kubelet restarted every replica, turning a
+    recoverable dependency blip into a full app outage. See LEARNINGS.md Phase 6.1.
+    """
+    return JSONResponse({"status": "alive"})
+
+
 @app.get("/health")
 async def health():
-    """Liveness. 200 if Postgres is reachable. Redis-down does not fail liveness."""
+    """Diagnostic only (NOT a probe target). Reports PG + Redis reachability."""
     pg_ok = False
     if db_pool:
         try:
