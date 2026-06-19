@@ -1,0 +1,42 @@
+# Experiment 3 — Redis primary pod-failure (cache outage / graceful degradation)
+#
+# Unlike #1 (Postgres), Redis is NOT on the critical path — so there is NO
+# collapse boundary to straddle. This is a SINGLE run that proves the
+# degraded-mode claim is real, not aspirational. `pod-failure` pauses the pod
+# (swaps in a pause image — no data loss) for `duration`, then restores it.
+#
+# Predicted signature (single run):
+#   - /health flips ok -> "degraded" (NOT "unhealthy") — app/main.py:226; PG is
+#     the source of truth, Redis is only a cache
+#   - CACHE_HITS -> CACHE_MISSES flip: every redirect's redis.get() raises and
+#     falls through to a Postgres lookup (app/main.py:399-400), then recovers
+#   - redirect_ok_rate HOLDS (~100%) — PG fallback serves every code
+#   - shorten_201_rate unaffected — the cache write is best-effort (main.py:359-361)
+#   - sign_success_rate / payment path unaffected — no Redis dependency
+#   - 0 app restarts — Redis is NOT a liveness dep (/livez is process-only), so
+#     a cache outage must NOT restart the app (contrast #1's pre-fix cascade)
+#   - redirect p95 may rise slightly during the window (PG round-trip vs cache)
+#
+# Watch:  /health status,  url_shortener_cache_hits_total / _cache_misses_total,
+#         redirect_ok_rate,  kube_pod_status_ready{pod=~"...redis..."}
+#         (no redis-exporter — redis_up does not exist; use pod-ready + cache counters)
+#
+# Run-protocol: trigger loadgen -> wait ~100s for k6 steady state -> apply this
+#               -> watch -> let 60s elapse -> delete -> score via query_range.
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: redis-pod-failure
+  namespace: url-shortener-staging   # CR lives in the target ns; ns is inject=enabled
+spec:
+  action: pod-failure
+  mode: one                          # single pod (the lone master)
+  duration: "60s"                    # it's just long enough to observe the degraded state + the cache-miss flip + clean recovery, short enough to keep the eventual gate fast
+  selector:
+    namespaces:
+      - url-shortener-staging
+    labelSelectors:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/instance: url-shortener-staging
+      app.kubernetes.io/component: master
