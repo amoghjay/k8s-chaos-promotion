@@ -8,6 +8,7 @@ facilitator's /verify and /settle endpoints, and persists the resulting
 settlement tx hash to Postgres.
 """
 
+import asyncio
 import os
 import secrets
 import string
@@ -19,7 +20,7 @@ import httpx
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse, Response
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, field_validator
 
@@ -54,6 +55,16 @@ CACHE_HITS = Counter("url_shortener_cache_hits_total", "Redis cache hits")
 CACHE_MISSES = Counter("url_shortener_cache_misses_total", "Redis cache misses (Postgres fallback)")
 URLS_CREATED = Counter("url_shortener_urls_created_total", "Short URLs created")
 
+# Dependency reachability, 1/0, refreshed by the background monitor every 10s.
+# /health and /ready are excluded from request instrumentation and a 200 can't
+# distinguish "ok" from "degraded" — so chaos scoring (and Grafana) had no clean
+# signal for the degraded state. This gauge is that signal.
+DEPENDENCY_UP = Gauge(
+    "url_shortener_dependency_up",
+    "1 if the backing dependency is reachable, else 0.",
+    ["dependency"],
+)
+
 # Outcome bucket for the full app-perceived facilitator flow.
 # Labels mirror payment.SettlementStatus + an extra `settled` value on success.
 PAYMENT_FACILITATOR = Counter(
@@ -81,6 +92,7 @@ db_pool: asyncpg.Pool | None = None
 redis_client: aioredis.Redis | None = None
 http_client: httpx.AsyncClient | None = None
 _started: bool = False  # Flipped once after first successful readiness check
+_db_lock = asyncio.Lock()  # Serializes lazy pool (re)creation in ensure_db_pool()
 
 ALPHABET = string.ascii_letters + string.digits
 
@@ -115,23 +127,107 @@ ALTER TABLE urls ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;
 
 
 # ---------------------------------------------------------------------------
+# Database pool (lazy + retryable)
+# ---------------------------------------------------------------------------
+async def ensure_db_pool() -> asyncpg.Pool | None:
+    """Return the asyncpg pool, creating it on demand if it doesn't exist yet.
+
+    create_pool() used to run *once* in lifespan; if Postgres wasn't accepting
+    connections at that moment, db_pool was pinned to None forever and the pod
+    wedged NotReady with no retry. This bites on every cluster bring-up: the app
+    boots fast and loses a race against the Postgres StatefulSet's WAL recovery
+    (chaos found this twice — see LEARNINGS Phase 6.1).
+
+    Making creation retryable turns a permanent wedge into a few seconds of
+    NotReady: /ready calls this every 5s, so the pool is rebuilt on the first
+    probe after Postgres is up and the pod flips Ready on its own — no restart.
+    """
+    global db_pool
+    if db_pool is not None:
+        return db_pool
+    async with _db_lock:
+        # Double-check: another coroutine may have built it while we waited.
+        if db_pool is not None:
+            return db_pool
+        try:
+            pool = await asyncpg.create_pool(
+                DATABASE_URL,
+                min_size=2,
+                max_size=10,
+                command_timeout=10,
+                # Bound a single connect attempt well under the /ready probe
+                # period (5s). Default is 60s — long enough that a black-holed
+                # Postgres would hold _db_lock and stack up readiness probes.
+                # A real boot race refuses-fast (port closed) or accepts-fast,
+                # so this only matters for the pathological hang case.
+                timeout=5.0,
+            )
+            async with pool.acquire() as conn:
+                await conn.execute(SCHEMA_SQL)
+            db_pool = pool
+            logger.info("Postgres connected")
+        except Exception as e:
+            logger.error("Postgres pool creation failed (will retry): %s", e)
+            db_pool = None
+    return db_pool
+
+
+# ---------------------------------------------------------------------------
+# Dependency monitor — refreshes DEPENDENCY_UP gauges independent of traffic
+# ---------------------------------------------------------------------------
+async def _monitor_dependencies(interval: float = 10.0) -> None:
+    """Ping Postgres + Redis on a timer and publish reachability gauges.
+
+    Decoupled from request handlers so the gauges stay fresh even when idle.
+    Pinging Postgres via ensure_db_pool() also gives a second lazy-pool retry
+    path (in addition to /ready), so a wedged pool recovers even with no traffic.
+    """
+    while True:
+        pg_up = 0
+        pool = await ensure_db_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.fetchval("SELECT 1")
+                pg_up = 1
+            except Exception:
+                pg_up = 0
+        DEPENDENCY_UP.labels(dependency="postgres").set(pg_up)
+
+        redis_up = 0
+        if redis_client:
+            try:
+                await redis_client.ping()
+                redis_up = 1
+            except Exception:
+                redis_up = 0
+        DEPENDENCY_UP.labels(dependency="redis").set(redis_up)
+
+        await asyncio.sleep(interval)
+
+
+# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db_pool, redis_client, http_client
+    global redis_client, http_client
+
+    # Best-effort at boot; if Postgres isn't up yet, /ready retries every 5s.
+    await ensure_db_pool()
 
     try:
-        db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10, command_timeout=10)
-        async with db_pool.acquire() as conn:
-            await conn.execute(SCHEMA_SQL)
-        logger.info("Postgres connected")
-    except Exception as e:
-        logger.error("Postgres failed: %s", e)
-        db_pool = None
-
-    try:
-        redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        # Tight timeouts so a DEAD cache fails fast to the Postgres fallback.
+        # Chaos #3 found that with the default (unbounded) timeout, every redirect
+        # during a Redis outage hung ~1s waiting on the dead client before falling
+        # through to PG — a ~10x latency regression. In-cluster Redis answers in
+        # <5ms, so 100ms is generous headroom while still failing fast.
+        redis_client = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=0.1,
+            socket_timeout=0.1,
+        )
         await redis_client.ping()
         logger.info("Redis connected")
     except Exception as e:
@@ -147,8 +243,15 @@ async def lifespan(app: FastAPI):
         os.getenv("FACILITATOR_URL", "<unset>"),
     )
 
+    monitor_task = asyncio.create_task(_monitor_dependencies())
+
     yield
 
+    monitor_task.cancel()
+    try:
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
     if db_pool:
         await db_pool.close()
     if redis_client:
@@ -195,7 +298,7 @@ async def livez():
     downstream DB; it only amplifies the outage. Chaos experiment #1 proved this:
     when liveness pointed at /health (PG-coupled), a 60s Postgres outage tripped
     the probe (3x503) and the kubelet restarted every replica, turning a
-    recoverable dependency blip into a full app outage. See LEARNINGS.md Phase 6.1.
+    recoverable dependency blip into a full app outage.
     """
     return JSONResponse({"status": "alive"})
 
@@ -236,10 +339,14 @@ async def ready():
     """
     global _started
 
+    # Drives the lazy-pool retry: if a boot race left db_pool=None, this rebuilds
+    # it here, so the readiness probe itself is the recovery loop.
+    pool = await ensure_db_pool()
+
     pg_ok = False
-    if db_pool:
+    if pool:
         try:
-            async with db_pool.acquire() as conn:
+            async with pool.acquire() as conn:
                 await conn.fetchval("SELECT 1")
             pg_ok = True
         except Exception:
