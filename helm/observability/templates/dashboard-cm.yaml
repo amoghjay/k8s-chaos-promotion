@@ -14,6 +14,39 @@ data:
       "schemaVersion": 38,
       "refresh": "10s",
       "time": { "from": "now-15m", "to": "now" },
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          },
+          {
+            "name": "Dependency outage (chaos)",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "enable": true,
+            "iconColor": "red",
+            "expr": "url_shortener_dependency_up{namespace=\"$namespace\"} == 0",
+            "step": "10s",
+            "titleFormat": "dependency down",
+            "tagKeys": "dependency",
+            "textFormat": "{{ "{{dependency}}" }} unreachable"
+          },
+          {
+            "name": "Signer down (chaos)",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "enable": true,
+            "iconColor": "orange",
+            "expr": "up{job=~\".*signer.*\"} == 0",
+            "step": "10s",
+            "titleFormat": "signer down"
+          }
+        ]
+      },
       "templating": {
         "list": [
           {
