@@ -446,6 +446,21 @@ data:
             }
           ],
           "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 2 } } }
+        },
+        {
+          "id": 21,
+          "title": "Dependency Up (1 = reachable, 0 = down)",
+          "description": "url_shortener_dependency_up gauge, refreshed every 10s by the app's background monitor. The clean degraded-state signal /health can't provide (it's excluded from request metrics, and a 200 can't distinguish ok from degraded). Watch redis drop to 0 during a cache-outage experiment while postgres stays 1.",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 64, "w": 24, "h": 6 },
+          "targets": [
+            {
+              "expr": "url_shortener_dependency_up{job=\"url-shortener\", namespace=\"$namespace\"}",
+              "legendFormat": "{{ "{{dependency}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1, "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "lineInterpolation": "stepAfter" } } }
         }
       ]
     }
