@@ -37,7 +37,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# Run with 2 workers by default; override via WORKERS env var in production
-ENV WORKERS=2
+# Single worker by default. prometheus_client keeps counters in PER-PROCESS
+# memory, so multiple uvicorn workers each expose their own counter
+ENV WORKERS=1
 
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS}"]
