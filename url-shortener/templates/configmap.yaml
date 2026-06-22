@@ -14,7 +14,7 @@ data:
   BASE_URL: "http://localhost:8080"
   CODE_LENGTH: "8"
   REDIS_TTL: "3600"
-  WORKERS: "4"
+  WORKERS: "1"
   REDIS_URL: "redis://url-shortener-prod-redis-master.url-shortener-prod.svc.cluster.local:6379"
   SBC_CONTRACT_ADDRESS: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
   SHORTEN_FEE: "1000"
