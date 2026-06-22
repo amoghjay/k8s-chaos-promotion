@@ -14,7 +14,7 @@ podDisruptionBudget:
 
 app:
   baseUrl: "http://localhost:8080"
-  workers: "2"
+  workers: "1"   # see values.yaml — >1 fabricates phantom traffic
 
 radius:
   enabled: true

@@ -23,7 +23,9 @@ app:
   baseUrl: "http://localhost:8000"
   codeLength: "8"
   redisTtl: "3600"
-  workers: "2"
+  # 1 worker: prometheus_client counters are per-process, so >1 worker fabricates
+  # phantom traffic under a single-target scrape. App is async + multi-replica.
+  workers: "1"
 
 radius:
   enabled: false
