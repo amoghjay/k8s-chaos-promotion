@@ -446,16 +446,102 @@ data:
         {
           "id": 106,
           "type": "row",
-          "title": "Chaos Impact (overlay views)",
+          "title": "Chaos Verdict & Impact  (set the dashboard range to one chaos run)",
           "collapsed": false,
           "gridPos": { "x": 0, "y": 54, "w": 24, "h": 1 }
+        },
+        {
+          "id": 22,
+          "title": "App Restarts (in range)",
+          "description": "url-shortener container restarts over the selected range. 0 = the fault degraded the app, it didn't detonate it — the /livez cascade detector. Any restart means a dependency outage triggered a kill. The single cleanest pass/fail signal for every experiment.",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 55, "w": 8, "h": 4 },
+          "targets": [
+            {
+              "expr": "max(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\", container=\"url-shortener\"}[$__range])) or vector(0)",
+              "legendFormat": "restarts",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "green" },
+                  { "value": 0.5,  "color": "red"   }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 23,
+          "title": "Permit2 Replays (in range)",
+          "description": "settlement_tx_hash UNIQUE-constraint violations over the range. Must be 0 across a signer restart — proves the random-nonce Permit2 flow produced no on-chain replay. Any value is a correctness failure.",
+          "type": "stat",
+          "gridPos": { "x": 8, "y": 55, "w": 8, "h": 4 },
+          "targets": [
+            {
+              "expr": "sum(increase(payment_replay_attempts_total{job=\"url-shortener\", namespace=\"$namespace\"}[$__range])) or vector(0)",
+              "legendFormat": "replays",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "green" },
+                  { "value": 0.5,  "color": "red"   }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 24,
+          "title": "Dependencies Recovered (end of range)",
+          "description": "Lowest url_shortener_dependency_up (postgres + redis) at the end of the range. 1 = every dependency reachable again after the fault cleared — the app self-healed with no restart. 0 = still down. (Signer recovery shows in the signer panels + the 'Signer down (chaos)' annotation.)",
+          "type": "stat",
+          "gridPos": { "x": 16, "y": 55, "w": 8, "h": 4 },
+          "targets": [
+            {
+              "expr": "min(url_shortener_dependency_up{job=\"url-shortener\", namespace=\"$namespace\"})",
+              "legendFormat": "deps up",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red"   },
+                  { "value": 0.5,  "color": "green" }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            }
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
           "id": 18,
           "title": "Money Shot: HTTP p99 vs Settlement p99 vs Facilitator-Verify p95 (ms)",
           "description": "The one panel to watch during chaos. End-user latency tracks the slowest of its deps. If HTTP+Settlement spike together → facilitator or upstream issue. If HTTP spikes alone → app issue (db/redis). If Facilitator-Verify spikes alone → facilitator's /verify is degraded while /settle is still OK (rare, but possible under chaos experiment #4).",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 55, "w": 24, "h": 9 },
+          "gridPos": { "x": 0, "y": 59, "w": 24, "h": 9 },
           "targets": [
             {
               "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le)) * 1000",
@@ -485,7 +571,7 @@ data:
           "title": "Dependency Up (1 = reachable, 0 = down)",
           "description": "url_shortener_dependency_up gauge, refreshed every 10s by the app's background monitor. The clean degraded-state signal /health can't provide (it's excluded from request metrics, and a 200 can't distinguish ok from degraded). Watch redis drop to 0 during a cache-outage experiment while postgres stays 1.",
           "type": "timeseries",
-          "gridPos": { "x": 0, "y": 64, "w": 24, "h": 6 },
+          "gridPos": { "x": 0, "y": 68, "w": 24, "h": 6 },
           "targets": [
             {
               "expr": "url_shortener_dependency_up{job=\"url-shortener\", namespace=\"$namespace\"}",
