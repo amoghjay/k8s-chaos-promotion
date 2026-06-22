@@ -33,7 +33,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: url-shortener
-          image: "us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener:sha-e25d8bd"
+          image: "us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener:sha-9bcbf0e"
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
