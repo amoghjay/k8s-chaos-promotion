@@ -30,7 +30,8 @@ fund_wallet() {
 
   echo ""
   echo "=== Funding ${env_name} (${address}) ==="
-  "${FUND_SCRIPT}" "${address}"
+  # Pass the key so the faucet's EIP-191 challenge can be signed locally.
+  WALLET_KEY="${normalized_key}" "${FUND_SCRIPT}" "${address}"
 }
 
 fund_wallet "WALLET_KEY_1"

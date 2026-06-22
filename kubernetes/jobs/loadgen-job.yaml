@@ -52,7 +52,7 @@ spec:
                 - name: ARRIVAL_TIME_UNIT
                   value: "1m"
                 - name: DURATION
-                  value: "5m"
+                  value: "10m"   # must outlast the chaos Workflow (~7.5m: warmup+pg+redis+signer+settle); 5m left signer running dry
                 - name: NETWORK_CAIP2
                   value: "eip155:72344"
                 - name: SBC_CONTRACT_ADDRESS
