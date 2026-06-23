@@ -17,11 +17,15 @@ not on bumps). Tune the CHECKS table below; the harness is generic.
 """
 import argparse
 import json
+import math
+import os
 import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+# In-cluster default. Override with --prom or $PROM_URL to score against a
+# port-forwarded Prometheus from a laptop (e.g. http://localhost:9090).
 PROM = "http://observability-kube-prometh-prometheus.monitoring.svc:9090"
 NS = "url-shortener-staging"
 
@@ -32,14 +36,34 @@ def query_range(expr, start, end, step="15s"):
     with urllib.request.urlopen(url, timeout=15) as r:
         return json.load(r)["data"]["result"]
 
+def query_instant(expr, t):
+    url = PROM + "/api/v1/query?" + urllib.parse.urlencode({"query": expr, "time": t})
+    with urllib.request.urlopen(url, timeout=15) as r:
+        return json.load(r)["data"]["result"]
+
+def scalar(vec):
+    # instant-vector result → one float. Counter exprs are wrapped in sum()/max(),
+    # so there's ≤1 series; empty (metric never fired) == 0.
+    if not vec:
+        return 0.0
+    try:
+        f = float(vec[0]["value"][1])
+    except (ValueError, KeyError, IndexError):
+        return 0.0
+    return 0.0 if math.isnan(f) else f
+
 def _floats(series):
     out = []
     for s in series:
         for _, v in s["values"]:
             try:
-                out.append(float(v))
+                f = float(v)
             except ValueError:
-                pass  # NaN
+                continue
+            # float("NaN") does NOT raise — Prometheus returns "NaN" for e.g.
+            # histogram_quantile over empty buckets, and one NaN poisons max().
+            if not math.isnan(f):
+                out.append(f)
     return out
 
 def aggregate(series, how):
@@ -123,7 +147,16 @@ def score(experiment, inject_at, duration):
     all_ok = True
     for c in cfg["checks"]:
         expr = c["expr"].format(ns=NS, w=window)
-        observed = aggregate(query_range(expr, start, end), c.get("agg", "max"))
+        if "increase(" in c["expr"]:
+            # Cumulative-counter checks ("stay near zero over the window"). Evaluate
+            # as ONE instant query at inject+window so increase([window]) looks back
+            # exactly to inject — events from a PRIOR experiment (e.g. postgres 500s
+            # leaking into the signer score) can't bleed in via the lookback.
+            observed = scalar(query_instant(expr, end))
+        else:
+            # Gauge/quantile checks (dependency_up, p95) — range + aggregate, with
+            # the -20s lead so the pre-inject baseline is visible.
+            observed = aggregate(query_range(expr, start, end), c.get("agg", "max"))
         ok = _OPS[c["op"]](observed, c["threshold"])
         all_ok &= ok
         print(f"  [{'✓' if ok else '✗'}] {c['name']:<55} "
@@ -136,5 +169,8 @@ if __name__ == "__main__":
     ap.add_argument("experiment", choices=list(EXPERIMENTS))
     ap.add_argument("--inject-at", required=True, help="UTC inject time, e.g. 2026-06-19T16:09:12Z")
     ap.add_argument("--duration", type=int, default=60, help="chaos duration seconds (default 60)")
+    ap.add_argument("--prom", default=os.environ.get("PROM_URL", PROM),
+                    help="Prometheus base URL (default: in-cluster svc, or $PROM_URL)")
     args = ap.parse_args()
+    PROM = args.prom  # rebinds the module global query_range() reads
     sys.exit(0 if score(args.experiment, args.inject_at, args.duration) else 1)

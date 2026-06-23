@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Generates ONLY the chaos-gate ConfigMap. The experiment CRDs (01/03/04) and
+# workflow.yaml in this dir are applied standalone (manually for game-days, and
+# workflow.yaml is mounted INTO the gate via the generator below) — they are
+# intentionally NOT listed as `resources:` here.
+#
+# The CM lands in `url-shortener` because that's where Kargo runs the AnalysisRun
+# / the gate Job — NOT url-shortener-staging (the gate reaches into staging via
+# kubectl + cross-namespace RBAC).
+namespace: url-shortener
+
+configMapGenerator:
+  - name: chaos-gate-scripts
+    files:
+      - orchestrate.sh
+      - score_experiment.py
+      - workflow.yaml
+
+# Same as jobs/kustomization.yaml — the Job mounts a fixed CM name, so no hash.
+generatorOptions:
+  disableNameSuffixHash: true

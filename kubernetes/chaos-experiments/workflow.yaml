@@ -1,8 +1,10 @@
 apiVersion: chaos-mesh.org/v1alpha1
 kind: Workflow
 metadata:
-  name: chaos-gate
+  generateName: chaos-gate-
   namespace: url-shortener-staging
+  labels:
+    app: chaos-gate
 spec:
   entry: gate-serial
   templates:

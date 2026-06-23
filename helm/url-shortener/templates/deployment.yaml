@@ -16,12 +16,18 @@ spec:
         app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
         # Explicit label for Chaos Mesh experiment selectors (Phase 6)
         app: url-shortener
-      {{- if .Values.metrics.enabled }}
       annotations:
+        # Roll the pods whenever the rendered ConfigMap changes. Without this a
+        # config-only Freight syncs the ConfigMap but never restarts pods (the pod
+        # spec is byte-identical), so the chaos-gate would validate STALE config.
+        # Must be unconditional — config-only promotions happen on envs where
+        # metrics are off too. ($ = root scope; .Template.BasePath only exists there.)
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.metrics.enabled }}
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ .Values.metrics.port | quote }}
         prometheus.io/path: {{ .Values.metrics.path | quote }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "url-shortener.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
