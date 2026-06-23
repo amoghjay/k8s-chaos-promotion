@@ -396,95 +396,118 @@ async def shorten_url(
     if db_pool is None:
         raise HTTPException(503, "Database unavailable")
 
-    async with db_pool.acquire() as conn:
-        # If this URL was already shortened, return it idempotently — no new payment required.
-        existing = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
-        if existing:
-            return JSONResponse(_short_url(existing["code"], body.url), status_code=200)
+    # Postgres is the source of truth for the code↔URL mapping; a write can't
+    # fall back to Redis (cache, not durable). When PG is unreachable we fail
+    # FAST with 503 + Retry-After rather than letting an asyncpg connection
+    # error bubble into a 500. The `is None` guard above only covers "pool never
+    # built" — it does NOT cover PG dying mid-request, which is where the
+    # acquire()/fetchrow() calls below throw.
+    #
+    # Paid-but-unwritten window: if PG dies AFTER settle_payment succeeds but
+    # before the INSERT, the client gets 503 and retries the SAME signed request.
+    # That recovers cleanly and without double-charging because (a) the Radius
+    # facilitator is idempotent — "Settlements are keyed from the payment payload
+    # and signature, so duplicate settlement attempts can return the existing
+    # result" (docs: x402-integration) — so the replay returns the cached tx, and
+    # (b) the INSERT is ON CONFLICT (url) idempotent. So the payment is pending,
+    # not lost. (A durable outbox would be over-engineering here.)
+    try:
+        async with db_pool.acquire() as conn:
+            # If this URL was already shortened, return it idempotently — no new payment required.
+            existing = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
+            if existing:
+                return JSONResponse(_short_url(existing["code"], body.url), status_code=200)
 
-        settlement_tx_hash: str | None = None
-        payer: str | None = None
+            settlement_tx_hash: str | None = None
+            payer: str | None = None
 
-        if PAYMENT_ENABLED:
-            if not payment_signature:
-                PAYMENT_402_RESPONSES.inc()
-                descriptor = payment_required_descriptor(str(request.url))
-                return Response(
-                    content="{}",
-                    status_code=402,
-                    media_type="application/json",
-                    headers={"PAYMENT-REQUIRED": encode_header(descriptor)},
-                )
+            if PAYMENT_ENABLED:
+                if not payment_signature:
+                    PAYMENT_402_RESPONSES.inc()
+                    descriptor = payment_required_descriptor(str(request.url))
+                    return Response(
+                        content="{}",
+                        status_code=402,
+                        media_type="application/json",
+                        headers={"PAYMENT-REQUIRED": encode_header(descriptor)},
+                    )
 
-            if http_client is None:
-                raise HTTPException(503, "HTTP client not initialised")
+                if http_client is None:
+                    raise HTTPException(503, "HTTP client not initialised")
 
-            with PAYMENT_SETTLEMENT_DURATION.time():
-                result = await settle_payment(payment_signature, http_client)
+                with PAYMENT_SETTLEMENT_DURATION.time():
+                    result = await settle_payment(payment_signature, http_client)
 
-            PAYMENT_FACILITATOR.labels(outcome=result.status.value).inc()
+                PAYMENT_FACILITATOR.labels(outcome=result.status.value).inc()
 
-            if result.status == SettlementStatus.FACILITATOR_UNREACHABLE:
-                raise HTTPException(503, result.message)
-            if result.status != SettlementStatus.SETTLED:
-                raise HTTPException(402, result.message)
+                if result.status == SettlementStatus.FACILITATOR_UNREACHABLE:
+                    raise HTTPException(503, result.message)
+                if result.status != SettlementStatus.SETTLED:
+                    raise HTTPException(402, result.message)
 
-            settlement_tx_hash = result.settlement_tx_hash
-            payer = result.payer
+                settlement_tx_hash = result.settlement_tx_hash
+                payer = result.payer
 
-        code = _generate_code()
+            code = _generate_code()
 
-        if PAYMENT_ENABLED:
-            try:
+            if PAYMENT_ENABLED:
+                try:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO urls (code, url, settlement_tx_hash, payer_address, settled_at)
+                        VALUES ($1, $2, $3, $4, NOW())
+                        ON CONFLICT (url) DO NOTHING
+                        RETURNING code
+                        """,
+                        code, body.url, settlement_tx_hash, payer,
+                    )
+                except asyncpg.UniqueViolationError:
+                    # settlement_tx_hash UNIQUE — the facilitator returned a cached
+                    # prior settlement, which we've already stored for a different
+                    # URL attempt. This is the load-bearing replay signal under
+                    # Permit2 (see design doc §5.1).
+                    PAYMENT_REPLAY_ATTEMPTS.inc()
+                    raise HTTPException(409, "Settlement transaction already used")
+
+                if row is None:
+                    existing_row = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
+                    if existing_row:
+                        return JSONResponse(_short_url(existing_row["code"], body.url), status_code=200)
+                    raise HTTPException(500, "Failed to create or resolve short URL")
+            else:
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO urls (code, url, settlement_tx_hash, payer_address, settled_at)
-                    VALUES ($1, $2, $3, $4, NOW())
-                    ON CONFLICT (url) DO NOTHING
+                    INSERT INTO urls (code, url)
+                    VALUES ($1, $2)
+                    ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url
                     RETURNING code
                     """,
-                    code, body.url, settlement_tx_hash, payer,
+                    code, body.url,
                 )
-            except asyncpg.UniqueViolationError:
-                # settlement_tx_hash UNIQUE — the facilitator returned a cached
-                # prior settlement, which we've already stored for a different
-                # URL attempt. This is the load-bearing replay signal under
-                # Permit2 (see design doc §5.1).
-                PAYMENT_REPLAY_ATTEMPTS.inc()
-                raise HTTPException(409, "Settlement transaction already used")
 
-            if row is None:
-                existing_row = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
-                if existing_row:
-                    return JSONResponse(_short_url(existing_row["code"], body.url), status_code=200)
-                raise HTTPException(500, "Failed to create or resolve short URL")
-        else:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO urls (code, url)
-                VALUES ($1, $2)
-                ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url
-                RETURNING code
-                """,
-                code, body.url,
+            URLS_CREATED.inc()
+
+            if redis_client:
+                try:
+                    await redis_client.setex(f"url:{row['code']}", REDIS_TTL, body.url)
+                except Exception:
+                    pass
+
+            headers = {}
+            if settlement_tx_hash:
+                headers["PAYMENT-RESPONSE"] = settled_response_header(
+                    settlement_tx_hash, payer or "",
+                )
+            return JSONResponse(
+                _short_url(row["code"], body.url), status_code=201, headers=headers,
             )
-
-        URLS_CREATED.inc()
-
-        if redis_client:
-            try:
-                await redis_client.setex(f"url:{row['code']}", REDIS_TTL, body.url)
-            except Exception:
-                pass
-
-        headers = {}
-        if settlement_tx_hash:
-            headers["PAYMENT-RESPONSE"] = settled_response_header(
-                settlement_tx_hash, payer or "",
-            )
-        return JSONResponse(
-            _short_url(row["code"], body.url), status_code=201, headers=headers,
-        )
+    except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError,
+            ConnectionError, OSError, asyncio.TimeoutError) as e:
+        # PG went away mid-request (e.g. pod-failure). Degrade cleanly: 503, not 500.
+        # type(e).__name__ in the log so a re-run tells us if any connection-error
+        # class slipped this tuple (then widen it).
+        logger.warning("postgres unavailable during /shorten (%s): %s", type(e).__name__, e)
+        raise HTTPException(503, "Database temporarily unavailable — retry shortly") from e
 
 
 @app.get("/payment-info")

@@ -100,6 +100,12 @@ EXPERIMENTS = {
             {"name": "app recovered after PG returned (both pods dependency_up==1)",
              "expr": 'min(url_shortener_dependency_up{{namespace="{ns}", dependency="postgres"}})',
              "agg": "last", "op": "==", "threshold": 1, "unit": "1/0"},
+            # Graceful-degradation check: PG-down must surface as a clean 503, NOT
+            # an unhandled 500. Keyed on status="500" exactly so 503 passes. Uses
+            # increase() → auto window-anchored (counts only this experiment's window).
+            {"name": "PG-down degrades cleanly: /shorten 500 == 0 (503 is fine, 500 is a bug)",
+             "expr": 'sum(increase(http_requests_total{{namespace="{ns}", handler="/shorten", status="500"}}[{w}s]))',
+             "op": "<", "threshold": 0.5, "unit": "500s"},
         ],
     },
     "redis-pod-failure": {
