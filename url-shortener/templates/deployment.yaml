@@ -25,6 +25,12 @@ spec:
         # Explicit label for Chaos Mesh experiment selectors (Phase 6)
         app: url-shortener
       annotations:
+        # Roll the pods whenever the rendered ConfigMap changes. Without this a
+        # config-only Freight syncs the ConfigMap but never restarts pods (the pod
+        # spec is byte-identical), so the chaos-gate would validate STALE config.
+        # Must be unconditional — config-only promotions happen on envs where
+        # metrics are off too. ($ = root scope; .Template.BasePath only exists there.)
+        checksum/config: 7becac336e24273fb04b15e07b3f381ef58ed58a86d443ce9d66ab624a9fce50
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
@@ -45,7 +51,7 @@ spec:
                 topologyKey: kubernetes.io/hostname
       containers:
         - name: url-shortener
-          image: "us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener:sha-9bcbf0e"
+          image: "us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener:sha-998c447"
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
