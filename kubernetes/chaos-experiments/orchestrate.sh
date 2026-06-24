@@ -44,6 +44,21 @@ declare -A DURATION=( [postgres]=120 [redis]=90 [signer]=90 )
 echo ">> pruning prior gate workflows"
 kubectl -n "$NS" delete workflow -l "$GATE_LABEL" --ignore-not-found
 
+# Sweep leftover chaos too. A podchaos can hang in Terminating on the
+# chaos-mesh/records finalizer (chaos controller fails to clear it) — its fault
+# then leaks past its window and keeps disrupting the target (this once wedged
+# the signer ~44m → loadgen preflight failed → a FALSE-PASS gate run). Deleting
+# the parent workflow does NOT cascade to an already-orphaned podchaos, and
+# `kubectl delete` is a no-op once it's stuck Terminating — so delete leftovers
+# by workflow label, then force-clear finalizers on anything still stuck.
+echo ">> sweeping leftover/orphaned chaos objects"
+kubectl -n "$NS" delete podchaos -l chaos-mesh.org/workflow --ignore-not-found --wait=false 2>/dev/null
+for pc in $(kubectl -n "$NS" get podchaos \
+    -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{" "}{end}' 2>/dev/null); do
+  echo "   force-clearing stuck finalizer on podchaos/$pc"
+  kubectl -n "$NS" patch podchaos "$pc" --type merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null
+done
+
 # ── Step 2: fire loadgen ──────────────────────────────────────────────────────
 # The Workflow's own 90s `warmup` Suspend absorbs k6 ramp, so we fire-and-forget
 # here. loadgen Job self-cleans via ttlSecondsAfterFinished.

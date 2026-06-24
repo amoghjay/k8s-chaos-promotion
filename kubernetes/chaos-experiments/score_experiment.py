@@ -78,6 +78,27 @@ _OPS = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
         ">": lambda a, b: a > b, ">=": lambda a, b: a >= b,
         "==": lambda a, b: abs(a - b) < 1e-9}
 
+# ── VACUOUS-PASS GUARD (attached to postgres + redis ONLY — see below) ───────────
+# A real Kargo gate run once FALSE-PASSED: an orphaned chaos wedged the signer →
+# loadgen aborted in preflight → 0 traffic → every SLO check passed trivially
+# against no data → promotion green-lit untested. This guard turns that silent
+# false-PASS into a loud ✗.
+# TWO subtleties found empirically while tuning it:
+#  1. `/livez` IS in http_requests_total (the liveness probe, ~35 reqs/window from
+#     2 pods × 6/min) — a noise floor that's ALWAYS present. Must exclude it, else
+#     a vacuous run reads ~35 reqs and the guard never fires. Hence handler!="/livez".
+#  2. Do NOT attach this to the SIGNER experiment: when the signer is down loadgen
+#     bails before /shorten, so the signer window legitimately sees ~0 user traffic
+#     even in a healthy run — a guard there would false-FAIL. postgres + redis keep
+#     serving under their faults, so they're the reliable "did load actually run?"
+#     probes. Measured: real run postgres=429 redis=289 vs vacuous=0/0 → 50 is a
+#     safe floor (huge margin both sides).
+TRAFFIC_GUARD = {
+    "name": "meaningful traffic flowed (guard vs vacuous pass)",
+    "expr": 'sum(increase(http_requests_total{{namespace="{ns}", handler!="/livez"}}[{w}s]))',
+    "op": ">", "threshold": 50, "unit": "reqs",
+}
+
 # ── PER-EXPERIMENT RULES  ***  TUNE THESE (degraded-mode thresholds)  *** ────────
 # Each check: name, PromQL expr ({ns},{w} substituted), agg over the window, op, threshold.
 #   - {w} is the scoring window length in seconds (duration + settle), for increase()/rate ranges.
@@ -91,6 +112,7 @@ EXPERIMENTS = {
         # closed the window 5s too early. 60s gives comfortable margin.
         "settle": 60,
         "checks": [
+            TRAFFIC_GUARD,
             {"name": "0 app restarts (THE liveness-cascade detector — exp #1's bug)",
              "expr": 'max(increase(kube_pod_container_status_restarts_total{{namespace="{ns}", container="url-shortener"}}[{w}s]))',
              "agg": "max", "op": "<", "threshold": 0.5, "unit": "restarts"},
@@ -111,6 +133,7 @@ EXPERIMENTS = {
     "redis-pod-failure": {
         "settle": 40,   # seconds after the duration to keep scoring (pod recovery tail)
         "checks": [
+            TRAFFIC_GUARD,
             {"name": "redirect p95 < 1.2s (fast-fail, not the old ~1s pin run-on)",
              "expr": 'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{namespace="{ns}", handler="/{{code}}"}}[1m])) by (le))',
              "agg": "max", "op": "<", "threshold": 1.2, "unit": "s"},

@@ -37,6 +37,15 @@ rules:
   - apiGroups: ["chaos-mesh.org"]
     resources: ["workflownodes"]
     verbs: ["get", "list"]
+  # orchestrate.sh prune step sweeps leftover/orphaned chaos so a fault that
+  # leaked past its window (a podchaos stuck Terminating on the
+  # chaos-mesh/records finalizer once wedged the signer ~44m) can't poison the
+  # next run: list/delete leftovers + patch to force-clear stuck finalizers.
+  # podchaos plural==singular==podchaos, so this one rule satisfies both k8s RBAC
+  # and Chaos Mesh's vauth webhook (no singular/plural split like workflow).
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["podchaos"]
+    verbs: ["get", "list", "delete", "patch"]
   # `kubectl create job --from=cronjob/loadgen` — read the cronjob, create the job.
   - apiGroups: ["batch"]
     resources: ["jobs"]
