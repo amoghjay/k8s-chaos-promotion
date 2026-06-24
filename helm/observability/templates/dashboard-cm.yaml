@@ -44,6 +44,22 @@ data:
             "expr": "up{job=~\".*signer.*\"} == 0",
             "step": "10s",
             "titleFormat": "signer down"
+          },
+          {
+            "name": "Chaos gate PASS",
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "iconColor": "green",
+            "type": "tags",
+            "tags": ["chaos-gate", "verdict:pass"]
+          },
+          {
+            "name": "Chaos gate FAIL",
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "iconColor": "red",
+            "type": "tags",
+            "tags": ["chaos-gate", "verdict:fail"]
           }
         ]
       },

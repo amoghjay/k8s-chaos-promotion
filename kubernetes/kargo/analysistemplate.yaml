@@ -53,6 +53,16 @@ spec:
                     image: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/gate-runner:v1
                     imagePullPolicy: Always   # :v1 is a stable MUTABLE tag — re-pull each run so a kubectl bump isn't masked by a cached layer
                     command: ["bash", "/scripts/orchestrate.sh"]
+                    env:
+                      # annotate.py posts the verdict to Grafana's dashboard timeline.
+                      - name: GRAFANA_URL
+                        value: http://observability-grafana.monitoring.svc
+                      - name: GRAFANA_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: grafana-annotation   # ESO-synced (external-secret-grafana.yaml)
+                            key: token
+                            optional: true              # gate still runs if the secret's absent; annotate.py self-skips
                     volumeMounts:
                       - name: scripts
                         mountPath: /scripts

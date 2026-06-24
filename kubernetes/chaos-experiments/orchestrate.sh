@@ -102,16 +102,21 @@ done < <(
 )
 
 # ── Step 6: score each experiment; ANY fail → gate fails ──────────────────────
+# Track WHICH experiments failed (not just rc) so the Grafana annotation (step 8)
+# can say "failed: postgres" instead of a bare FAIL.
 rc=0
+failed=""
 for exp in "${EXPERIMENTS[@]}"; do
   if [ -z "${T[$exp]:-}" ]; then
     echo "!! no startTime captured for '$exp' — cannot score, failing gate"
-    rc=1
+    rc=1; failed="${failed:+$failed,}$exp"
     continue
   fi
   echo ">> scoring $exp (inject=${T[$exp]} duration=${DURATION[$exp]}s)"
-  python3 "$SCRIPTS/score_experiment.py" "${exp}-pod-failure" \
-    --inject-at "${T[$exp]}" --duration "${DURATION[$exp]}" || rc=1
+  if ! python3 "$SCRIPTS/score_experiment.py" "${exp}-pod-failure" \
+    --inject-at "${T[$exp]}" --duration "${DURATION[$exp]}"; then
+    rc=1; failed="${failed:+$failed,}$exp"
+  fi
 done
 
 # ── Step 6.5: capture the k6 loadgen summary into THIS log (diagnostic only) ────
@@ -136,11 +141,18 @@ else
 fi
 echo "----- end k6 summary -----"
 
-# ── (optional, deferred) Grafana region-annotation of the run window ──────────
-# LEARNINGS:1036 wants the gate to POST a Grafana annotation marking the run.
-# Left out of the verdict path to keep the gate focused; add as a non-fatal hook
-# once a Grafana SA token is available. Not implemented on purpose.
+# ── Step 7: mark the run on the Grafana dashboard timeline (NON-FATAL) ────────
+# Region annotation over the workflow window, tagged verdict:pass|fail, so the
+# "Chaos Verdict & Impact" dashboard shows a green/red marker aligned with the
+# impact panels — Kargo's bare "Analysis failed" gets a one-glance "why".
+# annotate.py self-skips if $GRAFANA_TOKEN is unset (e.g. a standalone debug run),
+# and is wrapped so it can NEVER change the verdict.
+WF_START=$(kubectl -n "$NS" get workflow "$WF" -o jsonpath='{.status.startTime}' 2>/dev/null)
+WF_END=$(kubectl -n "$NS" get workflow "$WF" -o jsonpath='{.status.endTime}' 2>/dev/null)
+python3 "$SCRIPTS/annotate.py" \
+  --verdict "$([ $rc -eq 0 ] && echo pass || echo fail)" \
+  --failed "$failed" --start "$WF_START" --end "$WF_END" --workflow "$WF" || true
 
-# ── Step 7: verdict ───────────────────────────────────────────────────────────
+# ── Step 8: verdict ───────────────────────────────────────────────────────────
 echo ">> GATE VERDICT: $([ $rc -eq 0 ] && echo PASS || echo FAIL)"
 exit $rc

@@ -13,6 +13,7 @@ kind: Kustomization
 # (url-shortener). Local `kubectl apply -k` therefore needs `-n url-shortener`.
 resources:
   - chaos-gate-rbac.yaml
+  - external-secret-grafana.yaml   # Grafana SA token → secret in url-shortener (verdict annotation)
 
 configMapGenerator:
   - name: chaos-gate-scripts
@@ -20,6 +21,7 @@ configMapGenerator:
       - orchestrate.sh
       - score_experiment.py
       - workflow.yaml
+      - annotate.py
 
 # Same as jobs/kustomization.yaml — the Job mounts a fixed CM name, so no hash.
 generatorOptions:
