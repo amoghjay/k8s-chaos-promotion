@@ -17,10 +17,22 @@ metadata:
   name: chaos-gate
   namespace: url-shortener-staging
 rules:
-  # create/delete/wait the Workflow; list to prune by label.
+  # PLURAL "workflows" — the real kubectl API verbs: create/delete/wait, list to prune by label.
   - apiGroups: ["chaos-mesh.org"]
     resources: ["workflows"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # SINGULAR "workflow" is NOT a typo and is REQUIRED. Chaos Mesh's vauth.kb.io is a
+  # second authz layer on top of k8s RBAC: on Workflow create/delete it builds a RAW
+  # SubjectAccessReview with resource = strings.ToLower(Kind) = "workflow" (singular;
+  # see validate_auth.go resourceFor()). RBAC matches that string LITERALLY, so the
+  # plural rule above does NOT satisfy it — without this the webhook denies with
+  # "...is forbidden on namespace url-shortener-staging" even though
+  # `kubectl auth can-i create workflows` returns yes (kubectl normalizes via
+  # discovery; the webhook does not). podchaos is intentionally NOT granted: the
+  # embedded PodChaos is created later by the workflow controller's own SA, not ours.
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["workflow"]
+    verbs: ["create", "delete"]
   # read per-node .spec.startTime for the scorer inject times.
   - apiGroups: ["chaos-mesh.org"]
     resources: ["workflownodes"]
