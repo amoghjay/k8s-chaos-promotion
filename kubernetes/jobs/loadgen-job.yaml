@@ -24,7 +24,12 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      activeDeadlineSeconds: 600
+      # Must exceed DURATION (below) PLUS k6 preflight (setup(): signer health +
+      # wallet-bootstrap checks) and teardown/summary. At 600 == DURATION the Job
+      # deadline force-killed the pod mid-run every time → Job "Failed
+      # (DeadlineExceeded)", pod deleted, k6 summary lost. 720 gives ~2m headroom
+      # so k6 finishes cleanly and the run ends Complete. Bump with DURATION.
+      activeDeadlineSeconds: 720
       ttlSecondsAfterFinished: 3600
       template:
         spec:

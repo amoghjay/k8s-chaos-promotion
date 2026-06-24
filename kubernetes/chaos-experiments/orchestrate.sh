@@ -85,6 +85,28 @@ for exp in "${EXPERIMENTS[@]}"; do
     --inject-at "${T[$exp]}" --duration "${DURATION[$exp]}" || rc=1
 done
 
+# ── Step 6.5: capture the k6 loadgen summary into THIS log (diagnostic only) ────
+# rc (the verdict) is already decided from Prometheus above — this block NEVER
+# touches it. loadgen (DURATION=10m) outlives the workflow (~7.5m) + scoring, so
+# it's usually still running here; wait (bounded) for it to finish, then echo its
+# k6 summary so it lives in the gate log instead of vanishing with the pod (TTL)
+# or needing a manual fetch. Best-effort: a missing pod / timeout just prints a note.
+echo ">> waiting (<=4m) for loadgen $LOADGEN to finish, to capture its k6 summary"
+for _ in $(seq 1 48); do
+  conds=$(kubectl -n "$NS" get job "$LOADGEN" -o jsonpath='{range .status.conditions[*]}{.type}{" "}{end}' 2>/dev/null)
+  case "$conds" in *Complete*|*Failed*) break;; esac
+  sleep 5
+done
+echo "----- k6 loadgen summary ($LOADGEN) -----"
+lgpod=$(kubectl -n "$NS" get pods -l batch.kubernetes.io/job-name="$LOADGEN" \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+if [ -n "$lgpod" ]; then
+  kubectl -n "$NS" logs "$lgpod" 2>&1 | tail -45
+else
+  echo "!! loadgen pod gone (TTL-deleted or never scheduled) — no summary to show"
+fi
+echo "----- end k6 summary -----"
+
 # ── (optional, deferred) Grafana region-annotation of the run window ──────────
 # LEARNINGS:1036 wants the gate to POST a Grafana annotation marking the run.
 # Left out of the verdict path to keep the gate focused; add as a non-fatal hook
