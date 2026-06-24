@@ -56,8 +56,22 @@ WF=$(kubectl -n "$NS" create -f "$SCRIPTS/workflow.yaml" -o jsonpath='{.metadata
 echo ">> created workflow: $WF"
 
 # ── Step 4: wait for faults to finish + metrics to settle ─────────────────────
+# Poll the Accomplished condition instead of `kubectl wait`. `kubectl wait` does a
+# GET immediately after our create and BAILS with NotFound if that GET hits a
+# lagging API-server replica (read-after-write race — GKE runs an HA control
+# plane). It does NOT retry on NotFound, so the gate flaked: one run saw "condition
+# met", the next saw `workflows... not found` ~3s in and failed spuriously. A poll
+# loop tolerates the transient miss: an absent object yields an empty jsonpath, so
+# we just keep polling until Accomplished=True or the 15m budget is spent.
 echo ">> waiting for $WF to reach Accomplished (<=15m)"
-if ! kubectl -n "$NS" wait --for=condition=Accomplished "workflow/$WF" --timeout=900s; then
+acc=""
+for _ in $(seq 1 180); do            # 180 * 5s = 900s
+  acc=$(kubectl -n "$NS" get workflow "$WF" \
+    -o jsonpath='{.status.conditions[?(@.type=="Accomplished")].status}' 2>/dev/null)
+  [ "$acc" = "True" ] && break
+  sleep 5
+done
+if [ "$acc" != "True" ]; then
   echo "!! workflow did not Accomplish within timeout — scoring whatever data exists"
 fi
 

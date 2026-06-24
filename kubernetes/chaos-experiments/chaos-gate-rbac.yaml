@@ -44,6 +44,15 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["get"]
+  # orchestrate.sh step 6.5 captures the k6 loadgen summary into the gate log:
+  # `kubectl get pods -l batch.kubernetes.io/job-name=...` (find the loadgen pod)
+  # + `kubectl logs <pod>` (read its summary). pods/log is the logs subresource.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
