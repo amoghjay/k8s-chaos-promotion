@@ -58,7 +58,7 @@ spec:
             # cascading-restart outage: a 60s PG blip tripped 3x503 and restarted
             # every replica. See LEARNINGS.md Phase 6.1.
             httpGet:
-              path: /health   # !!! TEMP NEG-TEST regression (revert to /livez) — reintroduces the exp#1 liveness-cascade so chaos-gate BLOCKS this freight
+              path: /livez
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
