@@ -21,7 +21,9 @@ set -uo pipefail
 
 NS=url-shortener-staging
 GATE_LABEL="app=chaos-gate"            # fixed label on every gate workflow (prune key)
-SCRIPTS=/scripts                       # ConfigMap mount (orchestrate.sh, score_experiment.py, workflow.yaml)
+# In-cluster the CM mounts at /scripts. Override (SCRIPTS=$PWD, plus PROM_URL for
+# score_experiment.py) to run this SAME script from a laptop for debugging/game-days.
+SCRIPTS="${SCRIPTS:-/scripts}"
 EXPERIMENTS=(postgres redis signer)    # workflow templateNames == scorer key prefixes
 
 # Scoring window per experiment = duration + settle. Set to the per-node

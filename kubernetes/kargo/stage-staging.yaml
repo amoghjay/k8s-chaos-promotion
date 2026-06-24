@@ -69,6 +69,7 @@ spec:
   verification:
     analysisTemplates:
       - name: health-check
+      - name: chaos-gate          # runs the fault-injection gate; Job exit code = verdict
     args:
       - name: service-url
         value: http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80
