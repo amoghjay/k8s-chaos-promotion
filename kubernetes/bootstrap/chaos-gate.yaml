@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chaos-gate
+  namespace: argocd
+  annotations:
+    # After chaos-mesh (wave 3) and chaos-jobs (wave 5) — the gate consumes both.
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/amoghjay/k8s-chaos-promotion.git
+    targetRevision: main
+    path: kubernetes/chaos-experiments
+  destination:
+    server: https://kubernetes.default.svc
+    # Default ns for resources without one (the generated CM lands here). The
+    # RBAC carries its own namespaces and is unaffected by this.
+    namespace: url-shortener
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

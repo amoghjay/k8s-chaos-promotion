@@ -1,0 +1,48 @@
+# RBAC for the chaos-gate orchestrator Job.
+#
+# The Job runs in `url-shortener` (where Kargo creates the AnalysisRun), but it
+# acts on `url-shortener-staging` (fires loadgen, applies the Workflow, reads
+# nodes). So this is a CROSS-NAMESPACE grant: SA in url-shortener, Role +
+# RoleBinding in url-shortener-staging, with the binding pointing back at the
+# url-shortener SA. (Prometheus is queried over HTTP, not the k8s API — no RBAC.)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaos-gate
+  namespace: url-shortener
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaos-gate
+  namespace: url-shortener-staging
+rules:
+  # create/delete/wait the Workflow; list to prune by label.
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["workflows"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # read per-node .spec.startTime for the scorer inject times.
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["workflownodes"]
+    verbs: ["get", "list"]
+  # `kubectl create job --from=cronjob/loadgen` — read the cronjob, create the job.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos-gate
+  namespace: url-shortener-staging
+subjects:
+  - kind: ServiceAccount
+    name: chaos-gate
+    namespace: url-shortener        # the SA lives in the OTHER namespace
+roleRef:
+  kind: Role
+  name: chaos-gate
+  apiGroup: rbac.authorization.k8s.io

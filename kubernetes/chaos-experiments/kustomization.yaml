@@ -1,15 +1,18 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Generates ONLY the chaos-gate ConfigMap. The experiment CRDs (01/03/04) and
-# workflow.yaml in this dir are applied standalone (manually for game-days, and
-# workflow.yaml is mounted INTO the gate via the generator below) — they are
-# intentionally NOT listed as `resources:` here.
+# Deploys the chaos-gate's cluster-side pieces: the orchestrator ConfigMap and
+# the cross-namespace RBAC. The experiment CRDs (01/03/04) and workflow.yaml in
+# this dir are NOT listed as resources — they're applied standalone (game-days)
+# and workflow.yaml is mounted INTO the gate via the generator below.
 #
-# The CM lands in `url-shortener` because that's where Kargo runs the AnalysisRun
-# / the gate Job — NOT url-shortener-staging (the gate reaches into staging via
-# kubectl + cross-namespace RBAC).
-namespace: url-shortener
+# NO global `namespace:` here on purpose: the RBAC spans two namespaces (SA in
+# url-shortener, Role/RoleBinding in url-shortener-staging), so a global override
+# would be wrong. The RBAC carries explicit per-resource namespaces; the
+# generated CM has none and inherits the ArgoCD Application's destination
+# (url-shortener). Local `kubectl apply -k` therefore needs `-n url-shortener`.
+resources:
+  - chaos-gate-rbac.yaml
 
 configMapGenerator:
   - name: chaos-gate-scripts
