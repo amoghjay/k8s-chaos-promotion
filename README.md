@@ -12,7 +12,7 @@
 
 > Promotion that earns trust, not just passes tests.
 
-A Kubernetes platform where every staging → production promotion is **automatically gated by live chaos engineering**. If the running workload can't survive engineered failure — pod kills, network latency, payment-path degradation — the gate stays closed. No human approval can override it; the metrics either hold under chaos or they don't.
+A Kubernetes platform where every staging → production promotion is **automatically gated by live chaos engineering**. If the running workload can't survive engineered failure — its database, cache, or payment-signer killed mid-traffic — the gate stays closed. No human approval can override it; the metrics either hold under chaos or they don't.
 
 Built on **GKE + Terraform + ArgoCD + Kargo + Chaos Mesh**. The test workload is a paid API: every request settles a real micropayment via **x402** on the Radius testnet. The application is intentionally minimal — the platform underneath it, and how it gates promotions on observed reality, is the deliverable.
 
@@ -35,7 +35,7 @@ git push
                           └─▶ PROD     (manual approve, only after staging survives chaos)
 ```
 
-In staging, Chaos Mesh injects faults — pod kills, NetworkChaos against external dependencies, Redis outages, latency injection — while a k6 load generator drives continuous paid traffic against the app. Kargo only opens the gate to prod if Prometheus metrics (`payment_facilitator_total{outcome="settled"}`, `shorten_201_rate`, `redirect_ok_rate`, settlement latency p95) stay within thresholds *throughout* the chaos window.
+In staging, Chaos Mesh runs a serial **Workflow** that kills the app's dependencies one at a time — Postgres, then Redis, then the payment signer — each for a fixed window, while a k6 load generator drives continuous paid traffic. After each window the gate scores Prometheus directly: traffic actually flowed (`http_requests_total` above a floor, so the gate can't pass on an empty run), the app never restarted (a liveness cascade would surface here), and the killed dependency's `dependency_up` dipped and recovered — with no 5xx or duplicate-settlement errors. If any window fails its check, the gate stays closed and prod stays unreachable.
 
 ---
 
@@ -89,7 +89,7 @@ The test workload pays for itself. Every `POST /shorten` triggers a real micropa
      ← 201 + PAYMENT-RESPONSE header (settlement tx hash, payer address)
 ```
 
-Why this matters for chaos: each step touches a different dependency, so a chaos run shows *which* leg degraded. NetworkChaos against the facilitator → `payment_facilitator_call_duration_seconds{op}` spikes. Signer pod kill → `sign_success_rate` drops. Redis outage → cache hit rate plummets but the app stays up. Three distinct chaos signatures, three distinct root causes.
+Why this matters for chaos: each leg leans on a different dependency, so killing one produces a distinct signature the scorer can tell apart. **Postgres pod-failure** → the app sheds readiness (pulled from Service endpoints) but never restarts, then recovers when Postgres returns. **Redis pod-failure** → cache misses climb while writes still settle. **Signer pod-failure** → the payment leg degrades while the rest of the app stays healthy. Three experiments, three root-cause signatures.
 
 ---
 
@@ -112,9 +112,8 @@ End-to-end is ~2.5× faster despite `/shorten` itself being slower — the chain
 
 ## Architectural deep-dives
 
+- [**`docs/kubernetes-architecture.md`**](docs/kubernetes-architecture.md) — The system layer by layer: every Kubernetes object in play, the chaos-gate internals, a reverse index from K8s fundamental → where it lives in the repo, and runnable drills against the live cluster.
 - [**`docs/design/x402-migration.md`**](docs/design/x402-migration.md) — Full record of the x402 migration: design rationale, the mid-flight pivot from EIP-2612 to Permit2 after discovering the Radius first-party facilitator, M1 spike results with real on-chain settlement hashes, the §15 Phase 5.5b baseline.
-- [**`LEARNINGS.md`**](LEARNINGS.md) — Per-phase decisions, gotchas, and "aha" moments. Worth reading for the surprises that only show up under real traffic.
-- [**`PROJECT_CONTEXT.md`**](PROJECT_CONTEXT.md) — Durable handoff for new contributors / future-me.
 
 ---
 
@@ -138,7 +137,7 @@ curl -s -X POST http://localhost:8000/shorten \
 curl http://localhost:8000/health | jq .
 ```
 
-The full x402 path is exercised in the dev/staging environments on GKE — see [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) for the reconnect checklist and trigger commands.
+The full x402 path is exercised in the dev/staging environments on GKE — see the [architecture & practice guide](docs/kubernetes-architecture.md) for the cluster reconnect checklist and the live-cluster drills (including running the chaos gate end to end).
 
 ---
 
@@ -153,12 +152,17 @@ helm/
   url-shortener/                    App Helm chart — dev/staging/prod overlays
   observability/                    kube-prometheus-stack + Loki + custom Grafana dashboard
 kubernetes/
-  bootstrap/                        ArgoCD App-of-Apps (platform tools)
-  kargo/                            Stages, Warehouse, AnalysisTemplates
+  bootstrap/                        ArgoCD App-of-Apps — platform tools, sync-wave ordered
+  apps/                             ApplicationSet → one ArgoCD Application per env
+  kargo/                            Stages, Warehouse, AnalysisTemplates (health-check + chaos-gate)
+  chaos-experiments/                Chaos Workflow + PodChaos CRs, gate orchestrator + scorer, cross-ns RBAC
   jobs/                             Kustomize package: signer Deployment + suspended loadgen CronJob + ESO secrets
+docker/gate-runner/                 Gate-runner image (kubectl + python) — built to GAR by CI
 gke_terraform/                      GCP infrastructure (Terraform)
 scripts/                            Wallet funding, manual smoke utilities
-docs/design/                        Design docs (x402 migration, future chaos experiment specs)
+docs/
+  kubernetes-architecture.md        Architecture + live-cluster practice guide
+  design/x402-migration.md          x402 migration design record
 .github/workflows/                  Keyless OIDC image builds → GAR
 ```
 
@@ -166,7 +170,7 @@ docs/design/                        Design docs (x402 migration, future chaos ex
 
 ## Gotchas worth remembering
 
-Documented in detail in `LEARNINGS.md`; surfaced here so they're visible up front:
+A few of the non-obvious ones, surfaced here so they're visible up front:
 
 - **`SBC.approve()` on Radius costs ~115k gas**, not vanilla ERC-20 ~46k — Turnstile-related state mutations inflate it. Hardcoding 100k OOG'd on the first attempt. Always `estimate_gas` for SBC writes.
 - **The facilitator's validity signal is in the response body, not the HTTP status.** `/verify` returns HTTP 200 with `isValid: false` for bad signatures. 4xx/5xx is reserved for operational errors.
@@ -178,7 +182,13 @@ Documented in detail in `LEARNINGS.md`; surfaced here so they're visible up fron
 
 ## Status
 
-x402 payment migration shipped. Phase 6 (Chaos Mesh experiments against the post-x402 architecture + Kargo verification gate) is the active workstream.
+**Complete.** The chaos gate runs live through Kargo, end to end:
+
+- It **passes healthy freight** — and verifies real traffic actually flowed during each fault window, so a run can't pass vacuously.
+- It **blocks a resilience regression a plain health-check would wave through**: a deliberately fragile overlay (single replica, no PodDisruptionBudget, no persistence) fails the gate on the Postgres experiment *specifically* — the negative test.
+- The verdict is posted to Grafana as a **PASS/FAIL annotation band** over the chaos window.
+
+See [`docs/kubernetes-architecture.md`](docs/kubernetes-architecture.md) for the full system breakdown and the live-cluster drills.
 
 ---
 
