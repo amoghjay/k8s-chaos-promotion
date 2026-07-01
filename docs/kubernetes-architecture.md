@@ -45,12 +45,12 @@ gcloud container clusters resize chaos-promotion \
 | Property | Value |
 |----------|-------|
 | Cluster | GKE `chaos-promotion`, zone `us-central1-a` |
-| Nodes | 2× `e2-medium` on `default-pool` |
+| Nodes | 2× `e2-standard-2` on a single `default-pool` |
 | Mode | **GKE Standard** (not Autopilot) |
 | Project | `ajprojectplatform` |
 | Registry | `us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo` |
 
-**Why Standard, not Autopilot?** Chaos Mesh's `chaos-daemon` runs as a **privileged DaemonSet** that needs the node's container runtime socket — Autopilot blocks privileged pods. The cluster is **memory-bound, not CPU-bound** on 2× e2-medium, which is why `chaos-pool` (a separate Spot pool that was going to host node-drain experiments) sits **parked at 0** — chaos runs on `default-pool` alongside its targets at no extra cost.
+**Why Standard, not Autopilot?** Chaos Mesh's `chaos-daemon` runs as a **privileged DaemonSet** that needs the node's container runtime socket — Autopilot blocks privileged pods. The cluster is **memory-bound, not CPU-bound** on 2× e2-standard-2, so everything runs on a **single `default-pool`** — chaos-daemon co-locates with the pods it targets at no extra cost. (An earlier Spot `chaos-pool` intended for node-drain experiments was never used and has been **deleted** — node-drain isn't part of the gate.)
 
 ### Namespace map
 
@@ -226,7 +226,13 @@ A `ClusterSecretStore` named `gcp-secret-manager` ([`secrets/cluster-secret-stor
 
 > **Ordering trap (the "manual gap"):** an `ExternalSecret` targeting `monitoring` can't sync until the `monitoring` namespace exists — so the Grafana ExternalSecret must be applied *after* `root-app` creates the namespace. The bootstrap automation encodes this.
 
-**Fundamentals:** secret management, Workload Identity (pod identity without keys), controller-driven sync, namespace-scoped resources.
+**The model — ESO *mirrors*, it doesn't mount.** Each `ExternalSecret` (`creationPolicy: Owner`, `refreshInterval: 1h`) reads a key from Secret Manager and **materializes a native Kubernetes `Secret`** in the target namespace; downstream consumers then read that Secret the ordinary way (`envFrom` / `valueFrom.secretKeyRef` / `existingSecret`) and never know ESO exists. It can also **template** the rendered Secret — e.g. [`externalsecret.yaml`](../helm/url-shortener/templates/externalsecret.yaml) assembles a full `DATABASE_URL` from the pulled `database-password` + chart values, and [`external-secrets-monitoring.yaml`](../kubernetes/bootstrap/secrets/external-secrets-monitoring.yaml) sets a literal `username: admin` alongside the pulled password.
+
+**Why ESO, not the Secrets Store CSI Driver?** The CSI driver *mounts* provider secrets into a pod's filesystem at runtime; ESO *syncs* them into a real `Secret` object. This platform's consumers overwhelmingly want a **native `Secret`, not a file mount** — ArgoCD's repo credential (a labeled `Secret`), Grafana's `existingSecret`, Bitnami PostgreSQL/Redis's `existingSecret`, and plain env vars. Those are **controllers and non-pod consumers** that CSI (a per-pod volume + `SecretProviderClass`) serves awkwardly; you'd end up materializing Secrets anyway. ESO's "produce a real Secret" model matches how everything downstream already wants to consume it, with one `ClusterSecretStore` and N namespaced `ExternalSecret`s instead of per-workload volume wiring + a DaemonSet.
+
+**The trade-off (worth naming):** because ESO materializes Secrets, they live in **etcd** (base64, not encrypted at the app layer by default). GKE encrypts etcd at rest with Google-managed keys; defense-in-depth would add **CMEK application-layer encryption**. CSI's one genuine edge is keeping secrets *out* of etcd — sacrificed here for the controller-consumer ergonomics above.
+
+**Fundamentals:** secret management, Workload Identity (pod identity without keys), controller-driven **sync vs. mount** models, namespace-scoped resources, secrets-at-rest trade-offs.
 
 ### 4.5 Observability
 
