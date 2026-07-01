@@ -57,39 +57,3 @@ resource "google_container_node_pool" "default" {
     resource_labels = local.common_labels
   }
 }
-
-resource "google_container_node_pool" "chaos" {
-  name     = "chaos-pool"
-  location = var.zone
-  cluster  = google_container_cluster.gke_cluster.name
-
-  autoscaling {
-    min_node_count = 0
-    max_node_count = 1
-  }
-
-  management {
-    auto_repair  = true
-    auto_upgrade = true
-  }
-
-  node_config {
-    machine_type    = var.chaos_machine_type
-    disk_size_gb    = 50
-    service_account = google_service_account.gke_nodes.email
-    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
-    spot            = true
-
-    labels = {
-      role = "chaos"
-    }
-
-    resource_labels = local.common_labels
-
-    taint {
-      key    = "role"
-      value  = "chaos"
-      effect = "NO_SCHEDULE"
-    }
-  }
-}

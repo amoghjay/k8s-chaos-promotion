@@ -34,12 +34,6 @@ variable "default_machine_type" {
   default     = "e2-standard-2"
 }
 
-variable "chaos_machine_type" {
-  description = "Machine type for chaos nodes"
-  type        = string
-  default     = "e2-medium"
-}
-
 variable "github_repo" {
   description = "GitHub repository in owner/repo format — used to scope Workload Identity Federation to this repo only"
   type        = string
