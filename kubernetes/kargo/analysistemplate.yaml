@@ -55,13 +55,17 @@ spec:
                     command: ["bash", "/scripts/orchestrate.sh"]
                     env:
                       # annotate.py posts the verdict to Grafana's dashboard timeline.
+                      # Admin basic-auth: survives Grafana's ephemeral (no-PVC) DB, unlike
+                      # a service-account token that a restart wipes. See external-secret-grafana.yaml.
                       - name: GRAFANA_URL
                         value: http://observability-grafana.monitoring.svc
-                      - name: GRAFANA_TOKEN
+                      - name: GRAFANA_USER
+                        value: admin
+                      - name: GRAFANA_PASSWORD
                         valueFrom:
                           secretKeyRef:
-                            name: grafana-annotation   # ESO-synced (external-secret-grafana.yaml)
-                            key: token
+                            name: grafana-annotation   # ESO-synced (external-secret-grafana.yaml) — now holds the admin password
+                            key: password
                             optional: true              # gate still runs if the secret's absent; annotate.py self-skips
                     volumeMounts:
                       - name: scripts

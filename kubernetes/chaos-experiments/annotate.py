@@ -9,11 +9,16 @@ turning Kargo's bare "Analysis failed" into a one-glance "why".
 NON-FATAL BY DESIGN: the gate verdict must never depend on annotation success, so
 any problem (no token, network, unparseable time) prints a note and exits 0.
 
-Env: GRAFANA_URL (default in-cluster svc) + GRAFANA_TOKEN (a Grafana SA token;
-if unset — e.g. a standalone debug run without the ESO secret — we just skip).
-The image has no curl, so this uses stdlib urllib (same as score_experiment.py).
+Auth: prefer Grafana admin basic-auth (GRAFANA_USER/GRAFANA_PASSWORD). Grafana
+re-bootstraps its admin user from the ESO-synced grafana-admin secret on every
+start, so basic-auth survives Grafana's ephemeral DB (no PVC → a restart wipes
+service accounts, which is what broke the old Bearer-token path). Falls back to a
+Bearer SA token (GRAFANA_TOKEN) if that's how it's wired; skips if neither is set.
+Env: GRAFANA_URL (default in-cluster svc). The image has no curl, so this uses
+stdlib urllib (same as score_experiment.py).
 """
 import argparse
+import base64
 import json
 import os
 import sys
@@ -40,9 +45,17 @@ def main():
     a = ap.parse_args()
 
     url = os.environ.get("GRAFANA_URL", "http://observability-grafana.monitoring.svc").rstrip("/")
+    # Prefer admin basic-auth (survives Grafana's ephemeral DB); fall back to a
+    # Bearer SA token; skip entirely if neither is wired (e.g. standalone debug run).
+    user = os.environ.get("GRAFANA_USER", "admin").strip()
+    password = os.environ.get("GRAFANA_PASSWORD", "").strip()
     token = os.environ.get("GRAFANA_TOKEN", "").strip()
-    if not token:
-        print(">> annotate: GRAFANA_TOKEN unset — skipping (annotation is optional)")
+    if password:
+        authz = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+    elif token:
+        authz = f"Bearer {token}"
+    else:
+        print(">> annotate: no GRAFANA_PASSWORD or GRAFANA_TOKEN — skipping (annotation is optional)")
         return 0
 
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -65,7 +78,7 @@ def main():
     }).encode()
     req = urllib.request.Request(
         url + "/api/annotations", data=body, method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        headers={"Authorization": authz, "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             print(f">> annotate: posted ({r.status}) — {text}")
