@@ -80,7 +80,7 @@ data:
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
               "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", handler!=\"/livez\", handler!=\"/ready\"}[1m])) by (handler)",
-              "legendFormat": "{{handler}}" }
+              "legendFormat": "{{ "{{handler}}" }}" }
           ]
         },
         {
@@ -92,7 +92,7 @@ data:
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
               "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le, handler)) * 1000",
-              "legendFormat": "{{handler}}" }
+              "legendFormat": "{{ "{{handler}}" }}" }
           ]
         },
         {
@@ -104,7 +104,7 @@ data:
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
               "expr": "url_shortener_dependency_up{job=\"url-shortener\", namespace=\"$namespace\"}",
-              "legendFormat": "{{dependency}}" }
+              "legendFormat": "{{ "{{dependency}}" }}" }
           ]
         },
         {
