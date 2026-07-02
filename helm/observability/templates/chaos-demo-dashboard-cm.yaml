@@ -1,0 +1,184 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chaos-demo-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    # Grafana sidecar discovers ConfigMaps with this label (searchNamespace: ALL)
+    grafana_dashboard: "1"
+data:
+  chaos-demo.json: |
+    {
+      "title": "Chaos Gate — Live Demo (loadgen + gate logs)",
+      "uid": "chaos-demo",
+      "schemaVersion": 38,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "tags": ["chaos", "demo"],
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "custom",
+            "label": "app namespace",
+            "query": "url-shortener-staging,url-shortener-prod,url-shortener-dev",
+            "current": { "text": "url-shortener-staging", "value": "url-shortener-staging" },
+            "options": [
+              { "text": "url-shortener-staging", "value": "url-shortener-staging", "selected": true },
+              { "text": "url-shortener-prod", "value": "url-shortener-prod", "selected": false },
+              { "text": "url-shortener-dev", "value": "url-shortener-dev", "selected": false }
+            ]
+          },
+          {
+            "name": "loki",
+            "type": "datasource",
+            "label": "Loki datasource",
+            "query": "loki",
+            "current": {},
+            "hide": 0
+          }
+        ]
+      },
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "hide": true,
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          },
+          {
+            "name": "Chaos gate PASS",
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "iconColor": "green",
+            "tags": ["chaos-gate", "verdict:pass"]
+          },
+          {
+            "name": "Chaos gate FAIL",
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "iconColor": "red",
+            "tags": ["chaos-gate", "verdict:fail"]
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Impact — what the gate scores (Prometheus)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "timeseries",
+          "title": "Request rate by handler (req/s)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1 },
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", handler!=\"/livez\", handler!=\"/ready\"}[1m])) by (handler)",
+              "legendFormat": "{{handler}}" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "HTTP p95 latency (ms)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1 },
+          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"url-shortener\", namespace=\"$namespace\"}[1m])) by (le, handler)) * 1000",
+              "legendFormat": "{{handler}}" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "dependency_up (1 = healthy, dips during chaos)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 6, "w": 9, "x": 0, "y": 8 },
+          "fieldConfig": { "defaults": { "min": 0, "max": 1, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "fillOpacity": 20 } } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "url_shortener_dependency_up{job=\"url-shortener\", namespace=\"$namespace\"}",
+              "legendFormat": "{{dependency}}" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "5xx rate (req/s) — must stay flat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 6, "w": 9, "x": 9, "y": 8 },
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 40 }, "color": { "mode": "fixed", "fixedColor": "red" } } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(http_requests_total{job=\"url-shortener\", namespace=\"$namespace\", status=~\"5..\"}[1m]))",
+              "legendFormat": "5xx" }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "App restarts (range) — MUST be 0",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 6, "w": 6, "x": 18, "y": 8 },
+          "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "max(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\", container=\"url-shortener\"}[$__range])) or vector(0)" }
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Logs — loadgen & chaos gate (Loki)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+        },
+        {
+          "type": "logs",
+          "title": "Chaos gate scorecard  (ns: url-shortener)",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 11, "w": 12, "x": 0, "y": 15 },
+          "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" },
+              "expr": "{namespace=\"url-shortener\", pod=~\".+chaos-gate.*\"}", "queryType": "range" }
+          ]
+        },
+        {
+          "type": "logs",
+          "title": "k6 loadgen summary",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 11, "w": 12, "x": 12, "y": 15 },
+          "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" },
+              "expr": "{namespace=\"$namespace\", pod=~\"loadgen-.*\"}", "queryType": "range" }
+          ]
+        },
+        {
+          "type": "logs",
+          "title": "App (real requests, probes filtered)",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 11, "w": 12, "x": 0, "y": 26 },
+          "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" },
+              "expr": "{namespace=\"$namespace\", app=\"url-shortener\"} != \"/livez\" != \"/ready\"", "queryType": "range" }
+          ]
+        },
+        {
+          "type": "logs",
+          "title": "radius-signer",
+          "datasource": { "type": "loki", "uid": "${loki}" },
+          "gridPos": { "h": 11, "w": 12, "x": 12, "y": 26 },
+          "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" },
+              "expr": "{namespace=\"$namespace\", app=\"radius-signer\"}", "queryType": "range" }
+          ]
+        }
+      ]
+    }
