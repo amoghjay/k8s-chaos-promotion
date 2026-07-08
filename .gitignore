@@ -32,9 +32,6 @@ dist/
 *.log
 tmp/
 
-# Local compose override - keep out of git as requested
-docker-compose.yml
-
 # Terraform
 .terraform/
 .terraform.lock.hcl

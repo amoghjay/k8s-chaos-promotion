@@ -16,6 +16,9 @@ A Kubernetes platform where every staging → production promotion is **automati
 
 Built on **GKE + Terraform + ArgoCD + Kargo + Chaos Mesh**. The test workload is a paid API: every request settles a real micropayment via **x402** on the Radius testnet. The application is intentionally minimal — the platform underneath it, and how it gates promotions on observed reality, is the deliverable.
 
+[![Platform architecture](docs/diagrams/01-platform-architecture.png)](docs/diagrams/01-platform-architecture.png)
+*The full platform — CI, GitOps control plane, the three app environments, and the chaos gate. Click to zoom.*
+
 ---
 
 ## Why this exists
@@ -26,16 +29,14 @@ Most CD pipelines answer *"did the unit tests pass?"* This one answers *"did the
 
 ## How it works
 
-```
-git push
-  └─▶ GitHub Actions builds + pushes image to GAR (keyless OIDC)
-        └─▶ Kargo Warehouse detects new sha-* tag
-              └─▶ DEV       (auto-promote → /health analysis gate)
-                    └─▶ STAGING  (manual promote → chaos gate runs)
-                          └─▶ PROD     (manual approve, only after staging survives chaos)
-```
+[![Chaos-gated promotion flow](docs/diagrams/02-promotion-flow.png)](docs/diagrams/02-promotion-flow.png)
+
+`git push` → GitHub Actions builds and pushes the image to GAR (keyless OIDC) → the Kargo Warehouse detects the new `sha-*` tag → **dev** auto-promotes behind a `/health` analysis gate → **staging** promotes manually and runs the chaos gate → **prod** is manually approved, but only after staging has survived chaos.
 
 In staging, Chaos Mesh runs a serial **Workflow** that kills the app's dependencies one at a time — Postgres, then Redis, then the payment signer — each for a fixed window, while a k6 load generator drives continuous paid traffic. After each window the gate scores Prometheus directly: traffic actually flowed (`http_requests_total` above a floor, so the gate can't pass on an empty run), the app never restarted (a liveness cascade would surface here), and the killed dependency's `dependency_up` dipped and recovered — with no 5xx or duplicate-settlement errors. If any window fails its check, the gate stays closed and prod stays unreachable.
+
+[![Inside the chaos gate](docs/diagrams/03-chaos-gate.png)](docs/diagrams/03-chaos-gate.png)
+*Inside the gate: Kargo's AnalysisRun launches the orchestrator Job, which fires the loadgen and the chaos Workflow, then scores Prometheus and posts the verdict to Grafana.*
 
 ---
 
