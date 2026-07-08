@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Phase 07 — verify the platform is healthy end-to-end
-#
-# Read-only. Doesn't apply or change anything. Just probes state.
-# Returns non-zero if any critical check fails.
+# Phase 07 — verify the platform is healthy end-to-end.
+# Read-only; exits non-zero if any critical check fails.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,7 +62,7 @@ unsynced_apps=$(kubectl get app -n argocd 2>/dev/null | awk 'NR>1 && ($2 != "Syn
 if [ "$unsynced_apps" = "0" ]; then
   log_ok "  All ArgoCD apps Synced + Healthy"
 else
-  log_warn "  $unsynced_apps ArgoCD apps not fully Synced/Healthy (chaos-jobs Degraded after first install is expected — see LEARNINGS)"
+  log_warn "  $unsynced_apps ArgoCD apps not fully Synced/Healthy (chaos-jobs Degraded after first install is expected)"
   kubectl get app -n argocd 2>/dev/null >&2
 fi
 

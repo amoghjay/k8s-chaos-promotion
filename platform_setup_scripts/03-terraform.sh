@@ -1,22 +1,8 @@
 #!/usr/bin/env bash
-# Phase 03 — Terraform init + plan + apply (with safety gate)
-#
-# DEFAULT BEHAVIOR (safe):
-#   1. Clean .terraform/ cache (backend may have changed)
-#   2. terraform init against the configured GCS backend
-#   3. terraform plan -out=tfplan
-#   4. PROMPT user: "Apply this plan? [y/N]"
-#   5. On 'y' → apply. On anything else → exit, tell user how to apply manually.
-#   6. After apply, switch kubectl context to new cluster
-#
-# OPT-IN OVERRIDES:
-#   TF_AUTO_APPROVE=true   skip the prompt (for unattended runs — use carefully)
-#   PLAN_ONLY=true         exit after plan, never apply (manual apply later)
-#
-# FAILURE MODE: no auto-retries. If apply errors, you investigate.
-#   The known WI Pool race is now prevented by depends_on in eso.tf — if it
-#   somehow still fires, re-run this script; the cluster will already exist
-#   so the WI pool will be ready by the next plan/apply.
+# Phase 03 — terraform init + plan, prompt before apply, then switch kubectl context.
+# Overrides: TF_AUTO_APPROVE=true skips the prompt; PLAN_ONLY=true exits after plan.
+# No auto-retries — if the WI pool race fires despite depends_on in eso.tf, re-run;
+# the cluster will exist by then so the pool will be ready.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

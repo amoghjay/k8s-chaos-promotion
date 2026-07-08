@@ -4,13 +4,9 @@ metadata:
   name: url-shortener
   namespace: argocd
 spec:
-  # List generator: hardcode the environments.
-  # RENDERED-BRANCHES pattern: each env app tracks its OWN env/<env> branch, which
-  # holds PLAIN rendered YAML produced by the Kargo promotion's helm-template step
-  # (values-<env>.yaml is consumed THERE, at render time — see kargo/stage-*.yaml).
-  # ArgoCD never runs Helm; it just applies the rendered manifests. A chart/template/
-  # values change on main reaches an env ONLY when a promotion re-renders to that
-  # branch, so config changes are gated dev->staging->prod like images. LEARNINGS §6.1.
+  # Each env app tracks its own env/<env> branch of plain YAML rendered by the
+  # Kargo promotion (see kargo/stage-*.yaml). ArgoCD never runs Helm here, so a
+  # chart/values change only reaches an env when a promotion re-renders its branch.
   generators:
     - list:
         elements:
@@ -32,18 +28,16 @@ spec:
       source:
         repoURL: https://github.com/amoghjay/k8s-chaos-promotion.git
         targetRevision: env/{{env}}   # per-env rendered branch (static — Kargo never mutates it)
-        path: .                        # plain rendered YAML at the branch root
+        path: .
         directory:
-          recurse: true                # render nests under url-shortener/templates + charts/*;
-                                       # ArgoCD does NOT recurse by default → without this the
-                                       # apps find 0 manifests at root and prune to empty.
-        # no helm: block — ArgoCD applies pre-rendered manifests, it does not template
+          recurse: true                # rendered manifests are nested; without this
+                                       # ArgoCD finds 0 manifests and prunes to empty
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{namespace}}"
       syncPolicy:
         automated:
-          prune: true      # remove resources deleted from helm chart
-          selfHeal: true   # re-sync if cluster state drifts from git
+          prune: true
+          selfHeal: true
         syncOptions:
           - CreateNamespace=true

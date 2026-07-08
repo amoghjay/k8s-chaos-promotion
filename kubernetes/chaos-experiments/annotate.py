@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Mark a chaos-gate run on the Grafana dashboard timeline (verdict on the panels).
+"""Post a Grafana region annotation over the gate-run window, tagged
+`chaos-gate` + `verdict:pass|fail`, so the dashboard shows the verdict inline.
 
-Posts a Grafana annotation (region: time→timeEnd over the run window) tagged
-`chaos-gate` + `verdict:pass|fail`, so the "Chaos Verdict & Impact" dashboard
-shows a green/red marker aligned with the App-Restarts / dependency_up panels —
-turning Kargo's bare "Analysis failed" into a one-glance "why".
+Non-fatal by design: the gate verdict must never depend on annotation success,
+so any problem prints a note and exits 0.
 
-NON-FATAL BY DESIGN: the gate verdict must never depend on annotation success, so
-any problem (no token, network, unparseable time) prints a note and exits 0.
-
-Auth: prefer Grafana admin basic-auth (GRAFANA_USER/GRAFANA_PASSWORD). Grafana
-re-bootstraps its admin user from the ESO-synced grafana-admin secret on every
-start, so basic-auth survives Grafana's ephemeral DB (no PVC → a restart wipes
-service accounts, which is what broke the old Bearer-token path). Falls back to a
-Bearer SA token (GRAFANA_TOKEN) if that's how it's wired; skips if neither is set.
-Env: GRAFANA_URL (default in-cluster svc). The image has no curl, so this uses
-stdlib urllib (same as score_experiment.py).
+Auth prefers admin basic-auth (GRAFANA_USER/GRAFANA_PASSWORD): Grafana here has
+no PVC, so restarts wipe service-account tokens, while the admin user is
+re-seeded from the ESO-synced secret on every start. Falls back to a Bearer
+token (GRAFANA_TOKEN); skips if neither is set. Uses stdlib urllib — the gate
+image has no curl.
 """
 import argparse
 import base64
@@ -27,7 +21,7 @@ from datetime import datetime, timezone
 
 
 def _to_ms(iso):
-    """Workflow .status.startTime/endTime are 'YYYY-MM-DDTHH:MM:SSZ'. None on miss."""
+    """Workflow .status times are 'YYYY-MM-DDTHH:MM:SSZ'; None on parse miss."""
     try:
         dt = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         return int(dt.timestamp() * 1000)
@@ -45,8 +39,6 @@ def main():
     a = ap.parse_args()
 
     url = os.environ.get("GRAFANA_URL", "http://observability-grafana.monitoring.svc").rstrip("/")
-    # Prefer admin basic-auth (survives Grafana's ephemeral DB); fall back to a
-    # Bearer SA token; skip entirely if neither is wired (e.g. standalone debug run).
     user = os.environ.get("GRAFANA_USER", "admin").strip()
     password = os.environ.get("GRAFANA_PASSWORD", "").strip()
     token = os.environ.get("GRAFANA_TOKEN", "").strip()
@@ -61,7 +53,7 @@ def main():
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     start = _to_ms(a.start) or now_ms
     end = _to_ms(a.end) or now_ms
-    if end <= start:                       # point/garbage window → give it 1s so it renders
+    if end <= start:                       # point/garbage window — pad to 1s so it renders
         end = start + 1000
 
     text = f"chaos-gate {a.verdict.upper()}"

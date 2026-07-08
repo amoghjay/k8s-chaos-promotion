@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
-# Phase 02 — populate GCP Secret Manager
-#
-# Two modes:
-#   • Fresh setup: prompts for each secret value interactively
-#   • Migration:   when SOURCE_PROJECT is set, streams values from source
-#                  to destination via shell pipe (no disk writes)
-#
-# Both modes are idempotent — if a secret already exists in PROJECT_ID,
-# we add a new VERSION rather than failing.
+# Phase 02 — populate GCP Secret Manager. Prompts interactively, or streams from
+# SOURCE_PROJECT if set (no disk writes). Idempotent: existing secrets get a new version.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

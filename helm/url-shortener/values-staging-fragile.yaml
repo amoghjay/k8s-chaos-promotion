@@ -1,12 +1,7 @@
-# Fragile staging overlay — stacked on top of values-staging.yaml for failure demo (Phase 7.5)
-# Install with: -f values-staging.yaml -f values-staging-fragile.yaml
-#
-# Makes the app brittle in three ways:
-# 1. Single replica + no PDB → one pod kill takes the whole app down
-# 2. facilitatorTimeoutSeconds: "2" → facilitator calls time out under Chaos Mesh
-#    network-latency injection (replaces the old rpcTimeoutSeconds knob — under
-#    x402, the app's only outbound chain dependency is the facilitator)
-# 3. No persistence → data lost on pod restart, amplifying chaos blast radius
+# Fragile staging overlay, stacked on values-staging.yaml for the failure demo.
+# Deliberately brittle: single replica with no PDB (one pod kill = full outage),
+# a 2s facilitator timeout that trips under injected network latency, and no
+# persistence, so chaos blast radius is amplified.
 
 replicaCount: 1
 

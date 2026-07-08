@@ -4,18 +4,9 @@ metadata:
   name: loadgen
   namespace: url-shortener-staging
 spec:
-  # Suspended by design — ArgoCD sync should NOT auto-fire a load run.
-  # Triggering syncs (signer image bumps, config tweaks) shouldn't disrupt or
-  # accidentally start tests. A load run is always an explicit, named action:
-  #
-  #   kubectl -n url-shortener-staging create job --from=cronjob/loadgen \
-  #     loadgen-$(date +%s)
-  #
-  #   kubectl -n url-shortener-staging logs -f job/loadgen-<timestamp>
-  #
-  # The `schedule:` field is required by the API but never fires while
-  # suspended; pick a placeholder that wouldn't be alarming if accidentally
-  # unsuspended (Sundays at midnight on Jan 1 → won't fire most years).
+  # Suspended by design: ArgoCD syncs must never auto-fire a load run — runs are
+  # created explicitly with `kubectl create job --from=cronjob/loadgen`.
+  # The schedule is an API-required placeholder that never fires while suspended.
   suspend: true
   schedule: "0 0 1 1 0"
   concurrencyPolicy: Forbid
@@ -24,11 +15,8 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      # Must exceed DURATION (below) PLUS k6 preflight (setup(): signer health +
-      # wallet-bootstrap checks) and teardown/summary. At 600 == DURATION the Job
-      # deadline force-killed the pod mid-run every time → Job "Failed
-      # (DeadlineExceeded)", pod deleted, k6 summary lost. 720 gives ~2m headroom
-      # so k6 finishes cleanly and the run ends Complete. Bump with DURATION.
+      # Must exceed DURATION plus k6 setup/teardown, or the Job deadline kills the
+      # pod mid-run and the k6 summary is lost. Bump together with DURATION.
       activeDeadlineSeconds: 720
       ttlSecondsAfterFinished: 3600
       template:
@@ -36,8 +24,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: k6
-              # Vanilla upstream k6. loadgen.js drives all traffic through k6/http
-              # against radius-signer + url-shortener; no xk6 extensions needed.
+              # Vanilla upstream k6 — loadgen.js only uses k6/http, no xk6 extensions.
               image: grafana/k6:latest
               imagePullPolicy: IfNotPresent
               args: ['run', '/scripts/loadgen.js']
@@ -57,7 +44,7 @@ spec:
                 - name: ARRIVAL_TIME_UNIT
                   value: "1m"
                 - name: DURATION
-                  value: "10m"   # must outlast the chaos Workflow (~7.5m: warmup+pg+redis+signer+settle); 5m left signer running dry
+                  value: "10m"   # must outlast the chaos Workflow (~7.5m)
                 - name: NETWORK_CAIP2
                   value: "eip155:72344"
                 - name: SBC_CONTRACT_ADDRESS

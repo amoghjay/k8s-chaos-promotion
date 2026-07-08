@@ -14,14 +14,12 @@ spec:
       labels:
         {{- include "url-shortener.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-        # Explicit label for Chaos Mesh experiment selectors (Phase 6)
+        # Chaos Mesh experiment selectors match on this label
         app: url-shortener
       annotations:
-        # Roll the pods whenever the rendered ConfigMap changes. Without this a
-        # config-only Freight syncs the ConfigMap but never restarts pods (the pod
-        # spec is byte-identical), so the chaos-gate would validate STALE config.
-        # Must be unconditional — config-only promotions happen on envs where
-        # metrics are off too. ($ = root scope; .Template.BasePath only exists there.)
+        # Roll pods when the rendered ConfigMap changes — otherwise a config-only
+        # promotion syncs the ConfigMap without restarting pods, and the chaos gate
+        # would validate stale config. ($ = root scope, where .Template.BasePath lives.)
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- if .Values.metrics.enabled }}
         prometheus.io/scrape: "true"
@@ -34,8 +32,8 @@ spec:
       {{- if .Values.podAntiAffinity.enabled }}
       affinity:
         podAntiAffinity:
-          # preferred — not required, so scheduling still works on a 2-node cluster
-          # if both nodes are full. required would block pod scheduling entirely.
+          # preferred, not required — required would block scheduling entirely on a
+          # full 2-node cluster
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -58,12 +56,9 @@ spec:
             - secretRef:
                 name: {{ include "url-shortener.fullname" . }}-secret
           livenessProbe:
-            # /livez: process-only check, NEVER touches Postgres/Redis. Liveness
-            # answers "should k8s restart this process?" — a dependency outage must
-            # fail READINESS (pull from endpoints), not LIVENESS (restart, which
-            # can't fix a downstream DB). Chaos exp #1 proved /health here caused a
-            # cascading-restart outage: a 60s PG blip tripped 3x503 and restarted
-            # every replica. See LEARNINGS.md Phase 6.1.
+            # /livez is process-only and never touches Postgres/Redis — a dependency
+            # outage must fail readiness, not liveness (a restart can't fix a
+            # downstream DB and cascades instead).
             httpGet:
               path: /livez
               port: http
@@ -71,8 +66,7 @@ spec:
             periodSeconds: 10
             failureThreshold: 3
           readinessProbe:
-            # /ready: requires both Postgres + Redis on first startup,
-            # then only Postgres after _started flag is flipped.
+            # /ready requires Postgres + Redis on first startup, then only Postgres.
             httpGet:
               path: /ready
               port: http

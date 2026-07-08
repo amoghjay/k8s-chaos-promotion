@@ -5,23 +5,22 @@ metadata:
   namespace: url-shortener
 spec:
   args:
-    # Passed by each Stage — e.g. http://url-shortener-dev.url-shortener-dev.svc.cluster.local:8000
+    # Set by each Stage to that environment's service URL
     - name: service-url
 
   metrics:
     - name: health-check
-      # Run 3 times, 20s apart — confirms the app is stably healthy, not just briefly up
       count: 3
       interval: 20s
-      failureLimit: 1  # allow 1 failure (transient blip) before marking unhealthy
+      failureLimit: 1  # tolerate one transient blip
 
       provider:
         web:
           url: "{{args.service-url}}/health"
           jsonPath: "{$.status}"
 
-      # Accept both "ok" (all deps up) and "degraded" (redis down, app still functional)
-      # Fail only on "unhealthy" (postgres down) or non-200 HTTP response
+      # "degraded" (redis down, app still functional) passes; only "unhealthy"
+      # (postgres down) or a non-200 response fails.
       successCondition: result == "ok" || result == "degraded"
 ---
 apiVersion: argoproj.io/v1alpha1
@@ -32,31 +31,27 @@ metadata:
 spec:
   metrics:
     - name: chaos-gate
-      # `job` provider: the Job's EXIT CODE is the verdict. orchestrate.sh runs
-      # the chaos Workflow under load, scores each experiment over its node's
-      # window, and exits 0 (all SLOs held) / 1 (any collapsed). No
-      # successCondition needed — Argo Rollouts maps job success/failure directly.
+      # No successCondition — the Job's exit code is the verdict (0 = all SLOs held).
       provider:
         job:
           spec:
             backoffLimit: 0               # a gate must not retry — a retry masks the signal
-            activeDeadlineSeconds: 1200   # hard cap (~20m); the gate itself is ~10-12m
+            activeDeadlineSeconds: 1200   # hard cap; the gate itself runs ~10-12m
             ttlSecondsAfterFinished: 3600
             template:
               spec:
-                # SA lives in url-shortener (this ns); RoleBinding in staging grants
-                # the cross-namespace verbs the orchestrator needs. See chaos-gate-rbac.yaml.
+                # SA lives in this ns; a RoleBinding in staging grants the
+                # cross-namespace verbs the orchestrator needs (chaos-gate-rbac.yaml).
                 serviceAccountName: chaos-gate
                 restartPolicy: Never
                 containers:
                   - name: gate
                     image: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/gate-runner:v1
-                    imagePullPolicy: Always   # :v1 is a stable MUTABLE tag — re-pull each run so a kubectl bump isn't masked by a cached layer
+                    imagePullPolicy: Always   # :v1 is a mutable tag — re-pull each run
                     command: ["bash", "/scripts/orchestrate.sh"]
                     env:
-                      # annotate.py posts the verdict to Grafana's dashboard timeline.
-                      # Admin basic-auth: survives Grafana's ephemeral (no-PVC) DB, unlike
-                      # a service-account token that a restart wipes. See external-secret-grafana.yaml.
+                      # Grafana admin basic-auth for verdict annotations — survives
+                      # Grafana's ephemeral (no-PVC) DB, unlike a service-account token.
                       - name: GRAFANA_URL
                         value: http://observability-grafana.monitoring.svc
                       - name: GRAFANA_USER
@@ -64,9 +59,9 @@ spec:
                       - name: GRAFANA_PASSWORD
                         valueFrom:
                           secretKeyRef:
-                            name: grafana-annotation   # ESO-synced (external-secret-grafana.yaml) — now holds the admin password
+                            name: grafana-annotation   # ESO-synced (external-secret-grafana.yaml)
                             key: password
-                            optional: true              # gate still runs if the secret's absent; annotate.py self-skips
+                            optional: true              # gate still runs if absent; annotate.py self-skips
                     volumeMounts:
                       - name: scripts
                         mountPath: /scripts

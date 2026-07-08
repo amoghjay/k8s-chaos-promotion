@@ -9,14 +9,11 @@ spec:
         kind: Warehouse
         name: url-shortener
       sources:
-        direct: true  # gets freight directly from Warehouse (not from another stage)
+        direct: true
 
-  # RENDERED-BRANCHES pattern (Kargo's recommended approach):
-  # promotion RENDERS the chart to plain YAML at the freight's git commit + image
-  # tag, then commits to the env/<stage> branch. ArgoCD apps track env/<stage> and
-  # just apply plain YAML (no in-cluster Helm). A change reaches an env ONLY via a
-  # promotion that re-renders — closing the gate-hole. `main` is never written by
-  # promotions; the env branch IS the deployment record. See LEARNINGS.md §6.1.
+  # Rendered-branches pattern: promotion renders the chart to plain YAML at the
+  # freight's commit + image tag and pushes it to env/<stage>; ArgoCD applies that
+  # branch directly (no in-cluster Helm), so chart/config changes are gated per env.
   promotionTemplate:
     spec:
       vars:
@@ -26,8 +23,6 @@ spec:
           value: us-central1-docker.pkg.dev/ajprojectplatform/k8s-chaos-demo/url-shortener
 
       steps:
-        # 1. Check out the FREIGHT's git commit (chart+config source) to ./src,
-        #    and the env branch to ./out (created on first run).
         - uses: git-clone
           config:
             repoURL: ${{ vars.repoURL }}
@@ -38,8 +33,7 @@ spec:
                 path: ./out
                 create: true
 
-        # 2. Inject the freight's image tag into the WORKING COPY only (never pushed
-        #    to main — main stays human-authored source).
+        # Image tag is set in the working copy only — main is never pushed.
         - uses: yaml-update
           config:
             path: ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
@@ -47,13 +41,12 @@ spec:
               - key: image.tag
                 value: ${{ quote(imageFrom(vars.image).Tag) }}
 
-        # 3. Wipe the previous render so removed resources don't linger.
+        # Wipe the previous render so removed resources don't linger.
         - uses: git-clear
           config:
             path: ./out
 
-        # 4. Render the chart to plain YAML (deps vendored in charts/*.tgz, so no
-        #    network pull; validated locally to render cleanly).
+        # Chart deps are vendored in charts/*.tgz, so rendering needs no network pull.
         - uses: helm-template
           config:
             path: ./src/helm/url-shortener
@@ -64,7 +57,6 @@ spec:
               - ./src/helm/url-shortener/values-${{ ctx.stage }}.yaml
             outPath: ./out
 
-        # 5. Commit + push the rendered manifests to env/<stage> (NOT main).
         - uses: git-commit
           as: commit
           config:
@@ -74,8 +66,8 @@ spec:
           config:
             path: ./out
 
-        # 6. Nudge ArgoCD to sync. targetRevision is statically env/<stage> in the
-        #    ApplicationSet, so Kargo never mutates it (no AppSet clobber fight).
+        # targetRevision is statically env/<stage> in the ApplicationSet, so Kargo
+        # only nudges a sync and never mutates it (no ApplicationSet clobber fight).
         - uses: argocd-update
           config:
             apps:
@@ -83,8 +75,7 @@ spec:
                 sources:
                   - repoURL: ${{ vars.repoURL }}
 
-  # After promotion, verify health before marking freight verified.
-  # Staging only receives freight that passed this.
+  # Staging only receives freight that passed this verification.
   verification:
     analysisTemplates:
       - name: health-check

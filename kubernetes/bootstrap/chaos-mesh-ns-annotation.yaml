@@ -1,14 +1,10 @@
-# Opt url-shortener-staging IN to Chaos Mesh fault injection.
-# With controllerManager.enableFilterNamespace=true (see chaos-mesh.yaml),
-# ONLY namespaces carrying this annotation can be targeted by any experiment.
-# This is the blast-radius lock: prod, argocd, kube-system, monitoring, kargo
-# are all permanently out of reach because they lack this annotation.
+# Opts staging in to Chaos Mesh injection — with enableFilterNamespace=true
+# (chaos-mesh.yaml), only namespaces carrying this annotation can be targeted.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: url-shortener-staging
   annotations:
     chaos-mesh.org/inject: enabled
-    # Safety: root-app manages this annotation but must NEVER prune the
-    # namespace itself (that would delete all staging workloads + PVCs).
+    # root-app must never prune this namespace — it holds all staging workloads + PVCs.
     argocd.argoproj.io/sync-options: Prune=false

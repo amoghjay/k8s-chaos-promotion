@@ -1,16 +1,5 @@
 #!/usr/bin/env bash
-# bootstrap.sh — orchestrator for platform_setup_scripts
-#
-# Usage:
-#   ./bootstrap.sh                              # run all phases (00 → 07) in order
-#   ./bootstrap.sh --phase 3                    # run only phase 03
-#   ./bootstrap.sh --from 3                     # run phase 03 onwards
-#   ./bootstrap.sh --to 3                       # run phases 00 → 03 only
-#   ./bootstrap.sh --source-project amoghdevops \
-#                  --source-account amoghjay.us@gmail.com   # migration mode
-#   ./bootstrap.sh --dry-run                    # print commands without executing
-#   ./bootstrap.sh --help
-#
+# bootstrap.sh — orchestrator for platform_setup_scripts (see --help for usage).
 # Reads config from ./config.env (copy from config.env.example).
 
 set -euo pipefail

@@ -13,7 +13,6 @@ if [[ -z "$ADDRESS" ]]; then
   exit 1
 fi
 
-# Validate address format
 if [[ ! "$ADDRESS" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
   echo "ERROR: Invalid address format: $ADDRESS" >&2
   exit 1
@@ -38,7 +37,7 @@ drip() {  # $1 = optional ,"signature":"0x..." fragment
     -d "{\"address\":\"${ADDRESS}\",\"token\":\"${TOKEN}\"${1:-}}"
 }
 
-# Errors are now objects: .error.code (older API returned a bare string).
+# The error field may be an object (.error.code) or a bare string.
 err_code() { echo "$1" | jq -r '(.error.code // .error) // empty'; }
 
 echo ""
@@ -47,9 +46,8 @@ DRIP=$(drip)
 echo "Drip response: $DRIP"
 CODE=$(err_code "$DRIP")
 
-# Faucet now requires a signed challenge (EIP-191 personal_sign). We hold the
-# key, so sign the challenge locally with cast and resubmit — the key never
-# leaves the machine; only the signature is sent.
+# The faucet may require a signed challenge (EIP-191 personal_sign). Sign it
+# locally with cast and resubmit — only the signature leaves the machine.
 if [[ "$CODE" == "signature_required" ]]; then
   CHALLENGE=$(echo "$DRIP" | jq -r '(.error.details.challenge // .details.challenge) // empty')
   if [[ -z "$WALLET_KEY" ]]; then

@@ -1,31 +1,15 @@
-# Experiment 1 — Postgres primary pod-failure (source-of-truth outage)
-#
-# The #1 real-incident shape, and the experiment the original x402-migration §7
-# list skipped entirely. `pod-failure` pauses the pod (swaps in a non-existent
-# image — NO data loss, PVC untouched) for `duration`, then restores it.
-#
-# Predicted signature:
-#   - /health flips ok -> 503 "unhealthy" (app/main.py:202) while PG is paused
-#   - app FAILS FAST with 503, does not hang (connection pool errors surface)
-#   - readiness probe pulls the pod from the Service endpoints during outage
-#   - on restore, asyncpg pool reconnects cleanly WITHOUT a pod restart
-#   - shorten_201_rate collapses, redirects to already-cached codes may continue
-#   - recovery to "ok" within ~15s of the pause clearing
-#
-# Watch:  /health status,  url_shortener_urls_created_total rate,
-#         payment_facilitator_total,  pg_up (if postgres-exporter scraped)
-#
-# NOTE: Bitnami Postgres here has no HA — the same primary restarts from PVC.
-#       Run-protocol: trigger loadgen -> wait 30s -> apply this -> watch -> delete.
+# Kills the Postgres primary for 60s: source-of-truth outage. pod-failure pauses
+# the pod (no data loss, PVC untouched); the app should fail fast with 503 and
+# reconnect cleanly without a pod restart once Postgres returns.
 apiVersion: chaos-mesh.org/v1alpha1
 kind: PodChaos
 metadata:
   name: postgres-pod-failure
-  namespace: url-shortener-staging   # CR lives in the target ns; ns is inject=enabled
+  namespace: url-shortener-staging
 spec:
   action: pod-failure
-  mode: one                          # single pod (the lone primary)
-  duration: "60s"                    # bounded — auto-recovers; NEVER omit (persistent fault)
+  mode: one
+  duration: "60s"   # must be bounded — omitting duration makes the fault persistent
   selector:
     namespaces:
       - url-shortener-staging

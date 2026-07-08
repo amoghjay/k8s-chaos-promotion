@@ -1,13 +1,8 @@
-"""x402 facilitator client for the URL shortener.
+"""x402 facilitator client: decode the client's PAYMENT-SIGNATURE header, POST
+it to the facilitator's /verify then /settle, and return a SettlementResult.
 
-The app never touches the chain. We:
-  1. Decode the base64 PAYMENT-SIGNATURE header the client sent.
-  2. POST {x402Version, paymentPayload, paymentRequirements} to facilitator /verify.
-  3. On isValid=true, POST the same body to /settle.
-  4. Return a SettlementResult — main.py writes the settlement tx hash to Postgres.
-
-paymentRequirements is rebuilt from our own env config, NOT echoed from the client,
-so a client can't talk us into a cheaper price or a different recipient.
+paymentRequirements is rebuilt from our own env config, never echoed from the
+client, so a client can't negotiate a cheaper price or a different recipient.
 """
 
 from __future__ import annotations
@@ -24,17 +19,13 @@ from prometheus_client import Histogram
 
 logger = logging.getLogger("payment")
 
-# Per-endpoint timing — splits "facilitator slow" from "we slow" during chaos.
-# Promised in design doc §6.1; lives here (not in main.py) because the timing
-# happens here. The Instrumentator in main.py picks it up via the global
-# prometheus registry.
+# Per-endpoint timing separates "facilitator slow" from "app slow" during chaos.
 FACILITATOR_CALL_DURATION = Histogram(
     "payment_facilitator_call_duration_seconds",
     "Duration of each facilitator HTTP call (verify, settle), labelled by op.",
     ["op"],
 )
 
-# ---- Config ---------------------------------------------------------------
 FACILITATOR_URL = os.getenv(
     "FACILITATOR_URL", "https://facilitator.testnet.radiustech.xyz"
 ).rstrip("/")
@@ -49,7 +40,6 @@ FACILITATOR_TIMEOUT_S = float(os.getenv("FACILITATOR_TIMEOUT_SECONDS", "30"))
 MAX_TIMEOUT_SECONDS = int(os.getenv("PAYMENT_MAX_TIMEOUT_SECONDS", "300"))
 
 
-# ---- Result types ---------------------------------------------------------
 class SettlementStatus(Enum):
     SETTLED = "settled"
     SIGNATURE_INVALID = "signature_invalid"
@@ -67,15 +57,10 @@ class SettlementResult:
     payer: str = ""
 
 
-# ---- Server-side payment requirements (NOT echoed from client input) ------
-# Two near-identical shapes intentionally:
-#   _payment_requirements()      → what we send to facilitator /verify+/settle
-#                                  in `paymentRequirements`. `extra` carries
-#                                  only {name, version} per the facilitator API.
-#   payment_required_descriptor()→ what we base64 into the 402 PAYMENT-REQUIRED
-#                                  response header. `extra` ALSO carries
-#                                  assetTransferMethod so the client knows to
-#                                  sign Permit2 (not EIP-2612).
+# Two near-identical shapes on purpose: _payment_requirements() is the body
+# sent to /verify and /settle; payment_required_descriptor() (the 402 header)
+# additionally carries extra.assetTransferMethod so the client knows to sign
+# Permit2, not EIP-2612.
 def _payment_requirements() -> dict:
     return {
         "scheme": "exact",
@@ -113,16 +98,14 @@ def encode_header(payload: dict) -> str:
     return base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
 
 
-# ---- Core settlement -----------------------------------------------------
 async def _post_facilitator(
     client: httpx.AsyncClient, endpoint: str, body: dict
 ) -> tuple[dict | None, SettlementResult | None]:
     """POST to facilitator/{endpoint}. Returns (parsed_body, None) on HTTP 2xx,
     or (None, unreachable_result) on transport error / 4xx-5xx.
 
-    Per M1 finding: validity is signalled in the response body (isValid /
-    success), not the HTTP status — so 4xx/5xx is always operational, never
-    a payment-level rejection. Map both to FACILITATOR_UNREACHABLE.
+    The facilitator signals validity in the response body (isValid / success),
+    not the HTTP status — a 4xx/5xx is operational, never a payment rejection.
     """
     op = endpoint.lstrip("/")
     try:
@@ -167,8 +150,8 @@ async def settle_payment(
     if err:
         return err
     if not verify_body.get("isValid", False):
-        # invalidReason is free-form prose (M1 finding) — coarse-bucket
-        # signature failures, everything else is a generic verify failure.
+        # invalidReason is free-form prose — bucket signature failures;
+        # everything else is a generic verify failure.
         reason = (verify_body.get("invalidReason") or "").lower()
         status = (
             SettlementStatus.SIGNATURE_INVALID if "signature" in reason

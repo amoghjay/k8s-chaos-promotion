@@ -13,7 +13,6 @@ from web3 import HTTPProvider, Web3
 
 from permit2 import sign_permit_witness_transfer
 
-# ---- Config ---------------------------------------------------------------
 RPC_URL = os.getenv("RPC_URL", "").strip()
 CHAIN_ID = int(os.getenv("CHAIN_ID", "72344"))
 NETWORK_CAIP2 = os.getenv("NETWORK_CAIP2", f"eip155:{CHAIN_ID}")
@@ -41,10 +40,8 @@ logger = logging.getLogger("radius_signer")
 logging.basicConfig(level=logging.INFO)
 
 
-# ---- Metrics --------------------------------------------------------------
-# The FastAPI instrumentator already gives us http_requests_total and
-# http_request_duration_seconds per handler — we only add what it can't:
-# per-wallet outcome labels and boot-time approval status.
+# The instrumentator already exposes per-handler request count/duration; these
+# add per-wallet outcome labels and boot-time approval status.
 SIGN_OUTCOMES = Counter(
     "signer_sign_total",
     "Outcomes of /sign-permit2 calls labeled by terminal state and wallet.",
@@ -62,7 +59,6 @@ WALLET_SBC_BALANCE = Gauge(
 )
 
 
-# ---- ABI ------------------------------------------------------------------
 ERC20_ABI = [
     {"type": "function", "name": "balanceOf", "stateMutability": "view",
      "inputs": [{"name": "account", "type": "address"}],
@@ -78,7 +74,6 @@ ERC20_ABI = [
 ]
 
 
-# ---- Request schema -------------------------------------------------------
 class SignRequest(BaseModel):
     wallet_index: int = Field(ge=0)
     amount: int = Field(default=DEFAULT_SBC_AMOUNT, gt=0)
@@ -142,18 +137,12 @@ permit2_checksum = Web3.to_checksum_address(PERMIT2_CONTRACT_ADDRESS)
 x402_proxy_checksum = Web3.to_checksum_address(X402_PROXY_ADDRESS)
 
 
-# ---- Bootstrap ------------------------------------------------------------
 def _bootstrap() -> None:
-    """For each wallet, ensure SBC.approve(Permit2, MAX) is set.
+    """Ensure SBC.approve(Permit2, MAX) is set for each wallet, idempotently.
 
-    Idempotent (skips wallets already approved). Best-effort per wallet —
-    failure of one wallet doesn't crash the pod unless ALL wallets fail.
-    /sign-permit2 returns 503 for any wallet whose bootstrap failed;
-    operator action is to restart the pod.
-
-    Gas note: Radius SBC.approve uses ~115k gas (vs vanilla ERC-20 ~46k)
-    because of Turnstile-related state mutations, so we estimate_gas
-    rather than hardcoding (a 100k limit OOG'd during the M1 spike).
+    Best-effort per wallet; the pod only refuses to start if every wallet
+    fails. Radius SBC.approve costs ~115k gas (Turnstile state mutations) vs
+    ~46k for a vanilla ERC-20, so gas is estimated rather than hardcoded.
     """
     for slot in wallets:
         idx = str(slot.index)
@@ -210,7 +199,6 @@ def _bootstrap() -> None:
 _bootstrap()
 
 
-# ---- FastAPI --------------------------------------------------------------
 app = FastAPI(title="radius-signer", version="0.2.0")
 Instrumentator(
     excluded_handlers=["/metrics", "/health"],

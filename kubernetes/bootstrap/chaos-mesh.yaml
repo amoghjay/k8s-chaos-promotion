@@ -13,24 +13,21 @@ spec:
     targetRevision: "2.8.2"
     helm:
       values: |
-        # --- GKE Standard runtime fix ---
-        # GKE uses containerd, not docker. Chart defaults to docker → chaos-daemon
-        # CrashLoopBackOffs trying to reach a non-existent docker socket.
-        # (chaos-mesh issues #4232, #4240)
+        # GKE uses containerd — the chart's docker default leaves chaos-daemon
+        # crash-looping on a non-existent socket.
         chaosDaemon:
           runtime: containerd
           socketPath: /run/containerd/containerd.sock
         controllerManager:
-          # 2-node cluster doesn't need HA. One replica, no leader election.
+          # 2-node cluster — one replica, no leader election.
           replicaCount: 1
           leaderElection:
             enabled: false
-          # --- Blast-radius containment (safety-critical) ---
-          # Fault injection becomes opt-in per namespace. Only namespaces
-          # annotated chaos-mesh.org/inject=enabled can be targeted.
+          # Blast-radius lock: only namespaces annotated
+          # chaos-mesh.org/inject=enabled can be targeted.
           enableFilterNamespace: true
         dashboard:
-          # Keep auth on (this is the chart default; pinned here so it's explicit).
+          # Keep auth on (chart default; pinned to be explicit).
           securityMode: true
   destination:
     server: https://kubernetes.default.svc
@@ -41,4 +38,4 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-      - ServerSideApply=true   # required — Workflow/Schedule/WorkflowNode CRDs (643KB/852KB/1.3MB) exceed the 262144-byte client-side apply annotation limit. Same fix as kube-prometheus-stack.
+      - ServerSideApply=true   # required — Workflow/Schedule/WorkflowNode CRDs exceed ArgoCD's 262KB client-side apply annotation limit

@@ -82,8 +82,7 @@ metadata:
   name: radius-signer
   namespace: url-shortener-staging
   labels:
-    # ServiceMonitor selects on this; jobLabel="app.kubernetes.io/name" makes
-    # Prometheus emit job="radius-signer" on every scraped sample.
+    # ServiceMonitor selects on this label and uses it as the Prometheus job name.
     app.kubernetes.io/name: radius-signer
 spec:
   selector:
@@ -99,7 +98,7 @@ metadata:
   name: radius-signer
   namespace: url-shortener-staging
   labels:
-    # Must match kube-prometheus-stack.prometheus.prometheusSpec.serviceMonitorSelector.
+    # Must match the kube-prometheus-stack serviceMonitorSelector.
     release: observability
 spec:
   jobLabel: app.kubernetes.io/name

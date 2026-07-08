@@ -6,12 +6,11 @@ metadata:
   name: url-shortener-{{ . }}
   namespace: {{ . }}
   labels:
-    # Must match kube-prometheus-stack.prometheus.prometheusSpec.serviceMonitorSelector
+    # Must match the kube-prometheus-stack serviceMonitorSelector
     release: observability
 spec:
-  # Sets job="url-shortener" on all scraped metrics (from app.kubernetes.io/name on the Service).
-  # Without this, Prometheus auto-generates a messy label from the ServiceMonitor name.
-  # Use the `namespace` label in queries to distinguish dev/staging/prod.
+  # Sets job="url-shortener" on scraped metrics — without this Prometheus
+  # auto-generates a messy job label from the ServiceMonitor name.
   jobLabel: "app.kubernetes.io/name"
   selector:
     matchLabels:
@@ -21,9 +20,7 @@ spec:
       path: /metrics
       interval: 15s
       scrapeTimeout: 10s
-      # Explicitly copy the Kubernetes namespace into a `namespace` label on every scraped metric.
-      # kube-prometheus-stack does this via default relabeling, but being explicit is safer and
-      # makes it clear why {namespace="$namespace"} works in PromQL queries.
+      # Copy the k8s namespace into a `namespace` label so {namespace="..."} works in PromQL
       relabelings:
         - action: replace
           sourceLabels: [__meta_kubernetes_namespace]

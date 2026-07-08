@@ -1,10 +1,6 @@
-# RBAC for the chaos-gate orchestrator Job.
-#
-# The Job runs in `url-shortener` (where Kargo creates the AnalysisRun), but it
-# acts on `url-shortener-staging` (fires loadgen, applies the Workflow, reads
-# nodes). So this is a CROSS-NAMESPACE grant: SA in url-shortener, Role +
-# RoleBinding in url-shortener-staging, with the binding pointing back at the
-# url-shortener SA. (Prometheus is queried over HTTP, not the k8s API — no RBAC.)
+# RBAC for the chaos-gate orchestrator Job. Cross-namespace by design: the SA
+# lives in url-shortener (where Kargo runs the AnalysisRun), the Role/RoleBinding
+# in url-shortener-staging (where the Job acts).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -17,45 +13,32 @@ metadata:
   name: chaos-gate
   namespace: url-shortener-staging
 rules:
-  # PLURAL "workflows" — the real kubectl API verbs: create/delete/wait, list to prune by label.
   - apiGroups: ["chaos-mesh.org"]
     resources: ["workflows"]
     verbs: ["get", "list", "watch", "create", "delete"]
-  # SINGULAR "workflow" is NOT a typo and is REQUIRED. Chaos Mesh's vauth.kb.io is a
-  # second authz layer on top of k8s RBAC: on Workflow create/delete it builds a RAW
-  # SubjectAccessReview with resource = strings.ToLower(Kind) = "workflow" (singular;
-  # see validate_auth.go resourceFor()). RBAC matches that string LITERALLY, so the
-  # plural rule above does NOT satisfy it — without this the webhook denies with
-  # "...is forbidden on namespace url-shortener-staging" even though
-  # `kubectl auth can-i create workflows` returns yes (kubectl normalizes via
-  # discovery; the webhook does not). podchaos is intentionally NOT granted: the
-  # embedded PodChaos is created later by the workflow controller's own SA, not ours.
+  # Singular "workflow" is required, not a typo: Chaos Mesh's validation webhook
+  # runs its own SubjectAccessReview with resource = lowercased Kind ("workflow"),
+  # which the plural rule above does not satisfy.
   - apiGroups: ["chaos-mesh.org"]
     resources: ["workflow"]
     verbs: ["create", "delete"]
-  # read per-node .spec.startTime for the scorer inject times.
+  # Per-node .spec.startTime feeds the scorer's inject times.
   - apiGroups: ["chaos-mesh.org"]
     resources: ["workflownodes"]
     verbs: ["get", "list"]
-  # orchestrate.sh prune step sweeps leftover/orphaned chaos so a fault that
-  # leaked past its window (a podchaos stuck Terminating on the
-  # chaos-mesh/records finalizer once wedged the signer ~44m) can't poison the
-  # next run: list/delete leftovers + patch to force-clear stuck finalizers.
-  # podchaos plural==singular==podchaos, so this one rule satisfies both k8s RBAC
-  # and Chaos Mesh's vauth webhook (no singular/plural split like workflow).
+  # delete/patch let the prune step force-clear podchaos stuck on the
+  # chaos-mesh/records finalizer, so a leaked fault can't poison the next run.
   - apiGroups: ["chaos-mesh.org"]
     resources: ["podchaos"]
     verbs: ["get", "list", "delete", "patch"]
-  # `kubectl create job --from=cronjob/loadgen` — read the cronjob, create the job.
+  # `kubectl create job --from=cronjob/loadgen` reads the cronjob, creates the job.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "create"]
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["get"]
-  # orchestrate.sh step 6.5 captures the k6 loadgen summary into the gate log:
-  # `kubectl get pods -l batch.kubernetes.io/job-name=...` (find the loadgen pod)
-  # + `kubectl logs <pod>` (read its summary). pods/log is the logs subresource.
+  # pods + pods/log: capture the k6 loadgen summary into the gate log.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
@@ -71,7 +54,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: chaos-gate
-    namespace: url-shortener        # the SA lives in the OTHER namespace
+    namespace: url-shortener   # the SA deliberately lives in the other namespace
 roleRef:
   kind: Role
   name: chaos-gate

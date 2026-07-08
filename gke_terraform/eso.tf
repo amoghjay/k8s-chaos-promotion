@@ -20,16 +20,14 @@ resource "google_project_iam_member" "external_secrets_secret_accessor" {
   depends_on = [google_project_service.secret_manager]
 }
 
-# Allow the ESO K8s SA (external-secrets/external-secrets) to impersonate the GCP SA
-# This is the Workload Identity binding — no JSON key ever needed
+# Workload Identity binding: lets the ESO K8s SA impersonate the GCP SA (no JSON key)
 resource "google_service_account_iam_member" "eso_workload_identity_binding" {
   service_account_id = google_service_account.external_secrets.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[external-secrets/external-secrets]"
 
-  # The <project>.svc.id.goog identity pool only exists after the GKE cluster
-  # with workload_identity_config is created. Without this depends_on the
-  # binding can race the cluster and fail with "Identity Pool does not exist".
+  # The svc.id.goog identity pool only exists once the cluster is created; without
+  # this depends_on the binding races it and fails with "Identity Pool does not exist"
   depends_on = [google_container_cluster.gke_cluster]
 }
 

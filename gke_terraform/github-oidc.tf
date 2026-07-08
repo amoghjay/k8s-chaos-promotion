@@ -11,7 +11,6 @@ resource "google_project_service" "sts" {
   disable_on_destroy = false
 }
 
-# Workload Identity Pool for GitHub Actions
 resource "google_iam_workload_identity_pool" "github_pool" {
   project                   = var.project_id
   workload_identity_pool_id = "github-actions-pool"
@@ -24,7 +23,6 @@ resource "google_iam_workload_identity_pool" "github_pool" {
   ]
 }
 
-# OIDC provider mapping GitHub tokens to GCP identities
 resource "google_iam_workload_identity_pool_provider" "github_provider" {
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github_pool.workload_identity_pool_id
@@ -35,7 +33,6 @@ resource "google_iam_workload_identity_pool_provider" "github_provider" {
     issuer_uri = "https://token.actions.githubusercontent.com"
   }
 
-  # Map GitHub OIDC claims to GCP attributes
   attribute_mapping = {
     "google.subject"       = "assertion.sub"
     "attribute.actor"      = "assertion.actor"

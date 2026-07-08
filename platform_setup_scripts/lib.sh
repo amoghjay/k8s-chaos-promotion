@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
-# Shared library for platform_setup_scripts.
+# Shared library for platform_setup_scripts (logging, DRY_RUN wrappers, wait helpers).
 # Sourced by every phase script + the orchestrator.
-#
-# Functions:
-#   log_info/warn/err/ok   — colored stderr logging
-#   require_env            — assert env var is set
-#   gcloud_active          — verify gcloud auth + project context
-#   secret_exists          — true/false probe for a GCP secret (idempotency helper)
-#   k8s_apply              — wrapper that respects DRY_RUN
-#   run                    — wrapper that respects DRY_RUN
-#   wait_for               — wait until a kubectl JSONPath condition is met
 
 set -euo pipefail
 

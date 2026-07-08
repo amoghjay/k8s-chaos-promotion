@@ -1,11 +1,8 @@
-"""
-URL Shortener — FastAPI + Redis + Postgres
-Designed for chaos engineering demonstrations.
+"""URL shortener — FastAPI + Redis + Postgres.
 
-Payment path is x402 Permit2 via the Radius facilitator. The app never touches
-the chain — payment.py forwards the client's PAYMENT-SIGNATURE to the
-facilitator's /verify and /settle endpoints, and persists the resulting
-settlement tx hash to Postgres.
+Payments are x402 Permit2 via the Radius facilitator: payment.py forwards the
+client's PAYMENT-SIGNATURE to /verify and /settle; the settlement tx hash is
+persisted to Postgres. The app itself never touches the chain.
 """
 
 import asyncio
@@ -55,18 +52,16 @@ CACHE_HITS = Counter("url_shortener_cache_hits_total", "Redis cache hits")
 CACHE_MISSES = Counter("url_shortener_cache_misses_total", "Redis cache misses (Postgres fallback)")
 URLS_CREATED = Counter("url_shortener_urls_created_total", "Short URLs created")
 
-# Dependency reachability (1/0), refreshed by the monitor every 10s. /health
-# and /ready are excluded from request metrics and a 200 can't tell "ok" from
-# "degraded", so this gauge is the only clean degraded-state signal for chaos
-# scoring + Grafana.
+# Dependency reachability (1/0), refreshed by the monitor every 10s. Health
+# endpoints are excluded from request metrics, so this gauge is the only
+# degraded-state signal available for chaos scoring and Grafana.
 DEPENDENCY_UP = Gauge(
     "url_shortener_dependency_up",
     "1 if the backing dependency is reachable, else 0.",
     ["dependency"],
 )
 
-# Outcome bucket for the full app-perceived facilitator flow.
-# Labels mirror payment.SettlementStatus + an extra `settled` value on success.
+# Outcome labels mirror payment.SettlementStatus, plus `settled` on success.
 PAYMENT_FACILITATOR = Counter(
     "payment_facilitator_total",
     "Outcomes of facilitator-mediated payment attempts.",
@@ -102,8 +97,8 @@ def _generate_code() -> str:
     return "".join(secrets.choice(ALPHABET) for _ in range(CODE_LENGTH))
 
 
-# Schema bootstrap. CREATE TABLE for fresh deploys; ALTER for upgrades from the
-# pre-x402 schema that had tx_hash instead of settlement_tx_hash.
+# Schema bootstrap: CREATE for fresh installs; the DO block migrates older
+# deployments whose column was named tx_hash.
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS urls (
     code               VARCHAR(16) PRIMARY KEY,
@@ -131,12 +126,10 @@ ALTER TABLE urls ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;
 # Database pool (lazy + retryable)
 # ---------------------------------------------------------------------------
 async def ensure_db_pool() -> asyncpg.Pool | None:
-    """Lazily (re)create the asyncpg pool, rebuilding it on demand.
+    """Lazily (re)create the asyncpg pool.
 
-    Boot-only create_pool() pinned db_pool to None when the app won the
-    bring-up race against Postgres' WAL recovery, wedging /ready forever
-    (chaos found this twice — see LEARNINGS Phase 6.1). /ready calls this
-    every 5s, so the probe itself is the recovery loop.
+    Called from /ready every 5s, so the readiness probe doubles as the
+    recovery loop if pool creation lost a boot race against Postgres.
     """
     global db_pool
     if db_pool is not None:
@@ -167,10 +160,9 @@ async def ensure_db_pool() -> asyncpg.Pool | None:
 async def ensure_redis() -> aioredis.Redis | None:
     """Lazily (re)connect Redis, the twin of ensure_db_pool().
 
-    Boot-only connect pinned redis_client to None on a cluster-bring-up DNS
-    race, wedging /ready forever. ping() is the real validation (from_url is
-    lazy), so publish the global only on success. Never rebuilds a live client:
-    mid-life blips heal via redis-py's own reconnect.
+    ping() is the real validation (from_url is lazy), so the global is only
+    published on success. A live client is never rebuilt: mid-life blips heal
+    via redis-py's own reconnect.
     """
     global redis_client
     if redis_client is not None:
@@ -201,9 +193,8 @@ async def ensure_redis() -> aioredis.Redis | None:
 async def _monitor_dependencies(interval: float = 10.0) -> None:
     """Publish reachability gauges on a timer, fresh even when idle.
 
-    Going through ensure_db_pool()/ensure_redis() also makes this a second
-    reconnect path alongside /ready, so a wedged dependency recovers with no
-    traffic.
+    Going through ensure_db_pool()/ensure_redis() also gives a second
+    reconnect path alongside /ready.
     """
     while True:
         pg_up = 0
@@ -241,8 +232,8 @@ async def lifespan(app: FastAPI):
     await ensure_db_pool()
     await ensure_redis()
 
-    # One AsyncClient for the lifetime of the pod — connection pooling +
-    # keepalive matter when we hit the facilitator on every /shorten.
+    # One AsyncClient per pod lifetime — the facilitator is hit on every
+    # /shorten, so connection pooling and keepalive matter.
     http_client = httpx.AsyncClient()
     logger.info(
         "Payment %s (facilitator=%s)",
@@ -298,21 +289,18 @@ class ShortenRequest(BaseModel):
 # ---------------------------------------------------------------------------
 @app.get("/livez")
 async def livez():
-    """Liveness. Process-only — deliberately does NOT touch Postgres or Redis.
+    """Liveness: process-only, deliberately touches neither Postgres nor Redis.
 
-    A backing-dependency outage must fail READINESS (pull the pod from Service
-    endpoints), never LIVENESS (restart the pod). Restarting never fixes a
-    downstream DB; it only amplifies the outage. Chaos experiment #1 proved this:
-    when liveness pointed at /health (PG-coupled), a 60s Postgres outage tripped
-    the probe (3x503) and the kubelet restarted every replica, turning a
-    recoverable dependency blip into a full app outage.
+    A dependency outage must fail readiness (pull the pod from endpoints),
+    never liveness — restarting the pod can't fix a downstream DB and only
+    amplifies the outage.
     """
     return JSONResponse({"status": "alive"})
 
 
 @app.get("/health")
 async def health():
-    """Diagnostic only (NOT a probe target). Reports PG + Redis reachability."""
+    """Diagnostic only (not a probe target). Reports Postgres + Redis reachability."""
     pg_ok = False
     if db_pool:
         try:
@@ -339,15 +327,14 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """Readiness. Postgres required always; Redis required only before the first ready check.
+    """Readiness. Postgres always required; Redis only before the first success.
 
-    After the first successful readiness, killing Redis must not pull the pod from
-    the Service — chaos experiment #2 depends on this.
+    After the first successful check, a Redis outage must not pull the pod
+    from the Service.
     """
     global _started
 
-    # Drives the lazy-pool retry: if a boot race left db_pool=None, this rebuilds
-    # it here, so the readiness probe itself is the recovery loop.
+    # Rebuilds the pool if a boot race left it None — the probe is the recovery loop.
     pool = await ensure_db_pool()
 
     pg_ok = False
@@ -396,24 +383,15 @@ async def shorten_url(
     if db_pool is None:
         raise HTTPException(503, "Database unavailable")
 
-    # Postgres is the source of truth for the code↔URL mapping; a write can't
-    # fall back to Redis (cache, not durable). When PG is unreachable we fail
-    # FAST with 503 + Retry-After rather than letting an asyncpg connection
-    # error bubble into a 500. The `is None` guard above only covers "pool never
-    # built" — it does NOT cover PG dying mid-request, which is where the
-    # acquire()/fetchrow() calls below throw.
-    #
-    # Paid-but-unwritten window: if PG dies AFTER settle_payment succeeds but
-    # before the INSERT, the client gets 503 and retries the SAME signed request.
-    # That recovers cleanly and without double-charging because (a) the Radius
-    # facilitator is idempotent — "Settlements are keyed from the payment payload
-    # and signature, so duplicate settlement attempts can return the existing
-    # result" (docs: x402-integration) — so the replay returns the cached tx, and
-    # (b) the INSERT is ON CONFLICT (url) idempotent. So the payment is pending,
-    # not lost. (A durable outbox would be over-engineering here.)
+    # Writes need Postgres (Redis is only a cache), so a mid-request outage
+    # degrades to 503 + retry rather than a 500. If Postgres dies after
+    # settle_payment succeeds but before the INSERT, the client retries the
+    # same signed request safely: the facilitator keys settlements off the
+    # payload + signature (a replay returns the cached tx), and the INSERT is
+    # ON CONFLICT-idempotent — so the payment is pending, not lost.
     try:
         async with db_pool.acquire() as conn:
-            # If this URL was already shortened, return it idempotently — no new payment required.
+            # Already shortened — return the existing code, no new payment required.
             existing = await conn.fetchrow("SELECT code FROM urls WHERE url = $1", body.url)
             if existing:
                 return JSONResponse(_short_url(existing["code"], body.url), status_code=200)
@@ -462,10 +440,9 @@ async def shorten_url(
                         code, body.url, settlement_tx_hash, payer,
                     )
                 except asyncpg.UniqueViolationError:
-                    # settlement_tx_hash UNIQUE — the facilitator returned a cached
-                    # prior settlement, which we've already stored for a different
-                    # URL attempt. This is the load-bearing replay signal under
-                    # Permit2 (see design doc §5.1).
+                    # settlement_tx_hash is UNIQUE: the facilitator returned a
+                    # cached prior settlement already stored for another URL —
+                    # the replay signal under Permit2.
                     PAYMENT_REPLAY_ATTEMPTS.inc()
                     raise HTTPException(409, "Settlement transaction already used")
 
@@ -503,9 +480,8 @@ async def shorten_url(
             )
     except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError,
             ConnectionError, OSError, asyncio.TimeoutError) as e:
-        # PG went away mid-request (e.g. pod-failure). Degrade cleanly: 503, not 500.
-        # type(e).__name__ in the log so a re-run tells us if any connection-error
-        # class slipped this tuple (then widen it).
+        # Postgres went away mid-request — degrade to 503, not 500. The class
+        # name is logged so any connection error missing from this tuple shows up.
         logger.warning("postgres unavailable during /shorten (%s): %s", type(e).__name__, e)
         raise HTTPException(503, "Database temporarily unavailable — retry shortly") from e
 

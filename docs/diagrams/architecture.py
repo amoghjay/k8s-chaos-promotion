@@ -1,20 +1,9 @@
-"""
-Architecture diagrams for k8s-chaos-promotion, as code (mingrammer/diagrams).
+"""Architecture diagrams as code (mingrammer/diagrams). Writes three PNGs next
+to this file: 01-platform-architecture, 02-promotion-flow, 03-chaos-gate.
 
-Generates three PNGs next to this file:
-  01-platform-architecture.png  — the MAIN view: GKE as the substrate, platform
-                                   control plane + tenant workloads, supply chain, IaC.
-  02-promotion-flow.png         — the chaos-gated promotion pipeline (git push -> prod).
-  03-chaos-gate.png             — what happens inside the staging chaos gate.
-
-Run:
-  docs/diagrams/.venv/bin/python docs/diagrams/architecture.py
-Requires: graphviz (`brew install graphviz`) + `pip install diagrams`.
-
-Grounded in the real manifests/terraform (gke_terraform/*, kubernetes/*, helm/*).
-Kubernetes-native objects use the k8s icon set (CRD / Job / SA / DaemonSet); branded
-components use downloaded logos in icons/ (kargo, chaos-mesh, eso, radius, cosign) with
-a k8s fallback if a logo is missing. default-pool only (chaos-pool is parked/unused).
+Run: docs/diagrams/.venv/bin/python docs/diagrams/architecture.py
+Requires graphviz (`brew install graphviz`) and `pip install diagrams`.
+Branded components use logos in icons/, with a k8s icon fallback if missing.
 """
 
 import os
@@ -81,8 +70,7 @@ def eso(label):
 
 
 def radius(label):
-    # No verified radiustech.xyz logo on hand -> neutral external-service icon.
-    # Drop a correct logo into icons/radius.png and it will be used automatically.
+    # Falls back to a neutral external-service icon until icons/radius.png exists.
     return _custom("radius.png", label, Internet)
 
 
@@ -90,9 +78,7 @@ def cosign(label):
     return _custom("cosign.png", label, Blank)
 
 
-# ===========================================================================
-# 01 — PLATFORM ARCHITECTURE  (the main view: GKE is the substrate)
-# ===========================================================================
+# 01 — Platform architecture (GKE as the substrate)
 GRAPH_MAIN = dict(GRAPH, ranksep="1.3", nodesep="0.6", fontsize="24")
 with Diagram(
     "k8s-chaos-promotion — Platform Architecture",
@@ -193,9 +179,7 @@ with Diagram(
     apps >> Edge(label="x402 verify / settle", **PAY) >> rad
 
 
-# ===========================================================================
-# 02 — PROMOTION FLOW  (git push -> prod, chaos gate highlighted)
-# ===========================================================================
+# 02 — Promotion flow (git push -> prod, chaos gate highlighted)
 with Diagram(
     "Chaos-Gated Promotion Flow",
     filename=os.path.join(BASE, "02-promotion-flow"),
@@ -242,9 +226,7 @@ with Diagram(
     cm >> Edge(label="pod-failure", **FAULT) >> envs
 
 
-# ===========================================================================
-# 03 — INSIDE THE CHAOS GATE  (staging verification)
-# ===========================================================================
+# 03 — Inside the chaos gate (staging verification)
 with Diagram(
     "Inside the Chaos Gate (staging)",
     filename=os.path.join(BASE, "03-chaos-gate"),

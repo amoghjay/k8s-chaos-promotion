@@ -3,10 +3,8 @@ import encoding from 'k6/encoding';
 import { check, sleep } from 'k6';
 import { Rate } from 'k6/metrics';
 
-// ── Custom metrics ────────────────────────────────────────────────────────────
-// Post-x402: the signer no longer submits chain txs. The hot path is two HTTP
-// hops (signer → app → facilitator). Metric set tracks each hop independently
-// so a chaos run shows WHICH leg degraded.
+// Per-hop metrics so a chaos run shows which leg degraded (signer, app +
+// facilitator, redirect).
 const signSuccessRate     = new Rate('sign_success_rate');     // did /sign-permit2 return 200?
 const paymentSettledRate  = new Rate('payment_settled_rate');  // did /shorten return 201 with PAYMENT-RESPONSE?
 const shorten201Rate      = new Rate('shorten_201_rate');
@@ -15,7 +13,6 @@ const shorten409Rate      = new Rate('shorten_409_rate');
 const shorten5xxRate      = new Rate('shorten_5xx_rate');
 const redirectOkRate      = new Rate('redirect_ok_rate');
 
-// ── ENV vars ──────────────────────────────────────────────────────────────────
 const BASE_URL          = __ENV.BASE_URL    || 'http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80';
 const SIGNER_URL        = __ENV.SIGNER_URL  || 'http://radius-signer.url-shortener-staging.svc.cluster.local:8080';
 const NETWORK_CAIP2     = __ENV.NETWORK_CAIP2 || 'eip155:72344';
@@ -33,14 +30,10 @@ const DURATION          = __ENV.DURATION || '5m';
 const PAYMENT_BUFFER    = parseInt(__ENV.PRECHECK_BALANCE_BUFFER_PAYMENTS || '5');
 
 const thresholds = {
-  // /sign-permit2 is pure CPU — sub-millisecond. Was a real chain submission in
-  // the pre-x402 flow (~1.5s on Radius testnet); the threshold tightens by 25x.
+  // /sign-permit2 is pure CPU (no RPC) — sub-millisecond.
   'http_req_duration{endpoint:sign}':     ['p(95)<100'],
-  // /shorten now includes the facilitator's atomic on-chain Permit2.settle —
-  // the pre-x402 budget (p95<400ms, when /shorten only verified a client-side
-  // tx) is no longer realistic. Baseline observed in M6 2026-05-29: p95~680ms,
-  // bottoming at ~540ms (Radius testnet single-tx finalization). 1000ms gives
-  // comfortable headroom for chaos-induced variance.
+  // /shorten includes the facilitator's atomic on-chain Permit2 settle;
+  // observed baseline p95 ~680ms, so 1000ms leaves headroom for chaos variance.
   'http_req_duration{endpoint:shorten}':  ['p(95)<1000'],
   'http_req_duration{endpoint:redirect}': ['p(95)<100'],
   http_req_failed:   ['rate<0.05'],
@@ -53,7 +46,6 @@ if (PAYMENT_ENABLED) {
   thresholds.payment_settled_rate = ['rate>0.95'];
 }
 
-// ── Options ───────────────────────────────────────────────────────────────────
 export const options = LOAD_PROFILE === 'arrival-rate'
   ? {
       scenarios: {
@@ -63,9 +55,8 @@ export const options = LOAD_PROFILE === 'arrival-rate'
           timeUnit: ARRIVAL_TIME_UNIT,
           duration: DURATION,
           preAllocatedVUs: VUS,
-          // maxVUs == VUS so each VU maps to one signer wallet — important
-          // even under Permit2 (random nonces) because the signer's per-wallet
-          // boot-time approval is what gates which wallets can sign.
+          // maxVUs == VUS so each VU maps to one signer wallet: the signer's
+          // per-wallet boot-time approval gates which wallets can sign.
           maxVUs: VUS,
         },
       },
@@ -95,8 +86,8 @@ function parseDurationMs(value) {
 }
 
 function estimateRequiredWalletBalance() {
-  // SBC moves payer → merchant on each /shorten. Permit2 approval was already
-  // paid (one-time per wallet at signer boot), so no Turnstile reserve needed.
+  // SBC moves payer → merchant on each /shorten. Permit2 approval was paid
+  // once at signer boot, so no gas reserve is needed on top.
   const durationMs = parseDurationMs(DURATION);
   let expectedPaymentsPerWallet;
   if (LOAD_PROFILE === 'arrival-rate') {
@@ -180,7 +171,6 @@ function buildPaymentSignatureHeader(signerResponse) {
   return encoding.b64encode(JSON.stringify(envelope));
 }
 
-// ── Main loop ─────────────────────────────────────────────────────────────────
 export default function () {
   let paymentSignature = null;
 
@@ -224,7 +214,7 @@ export default function () {
     paymentSignature = buildPaymentSignatureHeader(signBody);
   }
 
-  // Step 2: POST /shorten with PAYMENT-SIGNATURE header (no more tx_hash body field).
+  // Step 2: POST /shorten with the PAYMENT-SIGNATURE header.
   const headers = { 'Content-Type': 'application/json' };
   if (paymentSignature) headers['PAYMENT-SIGNATURE'] = paymentSignature;
 
@@ -241,9 +231,8 @@ export default function () {
   shorten5xxRate.add(shorten.status >= 500 && shorten.status < 600);
 
   if (PAYMENT_ENABLED) {
-    // payment_settled_rate is the cleanest end-to-end "did the pay flow work"
-    // signal: 201 from /shorten AND the facilitator gave us a tx hash (echoed
-    // in PAYMENT-RESPONSE). Skips the existing-URL 200 case which doesn't pay.
+    // Settled = 201 plus a facilitator tx hash echoed in PAYMENT-RESPONSE.
+    // The existing-URL 200 path doesn't pay and is excluded.
     const settled = shorten.status === 201 && Boolean(shorten.headers['Payment-Response']);
     paymentSettledRate.add(settled);
   }
