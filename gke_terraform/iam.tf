@@ -7,14 +7,12 @@ resource "google_service_account" "gke_nodes" {
   description  = "Least-privilege SA for GKE nodes (logging, monitoring, GAR pull, Workload Identity metadata)"
 }
 
-# Send container/node logs to Cloud Logging
 resource "google_project_iam_member" "gke_nodes_log_writer" {
   project = var.project_id
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.gke_nodes.email}"
 }
 
-# Write node/pod metrics to Cloud Monitoring
 resource "google_project_iam_member" "gke_nodes_metric_writer" {
   project = var.project_id
   role    = "roles/monitoring.metricWriter"
@@ -28,7 +26,7 @@ resource "google_project_iam_member" "gke_nodes_monitoring_viewer" {
   member  = "serviceAccount:${google_service_account.gke_nodes.email}"
 }
 
-# Pull images from GAR — needed since we moved off Docker Hub
+# Nodes pull app images from GAR
 resource "google_project_iam_member" "gke_nodes_gar_reader" {
   project = var.project_id
   role    = "roles/artifactregistry.reader"

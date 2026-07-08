@@ -1,7 +1,5 @@
 image:
-  tag: "sha-c41053e"  # pinned off ":latest" — old :latest lacked /livez and caused a
-                      # liveness restart loop (gate-hole: the /livez probe reached prod
-                      # ungated). sha-c41053e is the dev/staging-verified image with /livez.
+  tag: "sha-c41053e"  # pinned to a staging-verified image — never ":latest"
 
 replicaCount: 2
 
@@ -20,7 +18,7 @@ radius:
   facilitatorUrl: "https://facilitator.radiustech.xyz"  # mainnet facilitator
   networkCaip2: "eip155:723487"
   serviceWalletAddress: ""    # injected via ESO ExternalSecret
-  chainId: "723487"           # mainnet — corrected from old 723 per Radius chain-ID migration
+  chainId: "723487"           # mainnet chain ID
   facilitatorTimeoutSeconds: "30"
 
 resources:
@@ -36,7 +34,7 @@ postgresql:
       size: 5Gi
 
 serviceAccount:
-  annotations: {}             # WI binding added in Phase 4/5 when ESO is set up
+  annotations: {}
 
 externalSecrets:
   enabled: true

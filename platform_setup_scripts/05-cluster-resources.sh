@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# Phase 05 — Cluster resources (local kubectl applies, no Git fetching)
-#
-# Applies:
-#   • ClusterSecretStore (ESO config pointing at GCP Secret Manager)
-#   • ArgoCD repo ExternalSecret (GitHub PAT for ArgoCD git auth)
-#
-# Grafana ExternalSecret is intentionally deferred — its target ns (monitoring)
-# doesn't exist until root-app syncs in Phase 06.
-#
-# All applies are idempotent (kubectl apply is desired-state).
+# Phase 05 — apply ClusterSecretStore + ArgoCD repo ExternalSecret (idempotent).
+# Grafana ExternalSecret is deferred to Phase 06: its target ns (monitoring)
+# doesn't exist until root-app syncs.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

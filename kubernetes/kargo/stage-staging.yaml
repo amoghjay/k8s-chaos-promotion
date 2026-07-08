@@ -10,9 +10,9 @@ spec:
         name: url-shortener
       sources:
         stages:
-          - dev  # only receives freight that has been verified in dev
+          - dev  # only receives freight verified in dev
 
-  # RENDERED-BRANCHES pattern — see stage-dev.yaml for the rationale.
+  # Rendered-branches pattern — see stage-dev.yaml.
   promotionTemplate:
     spec:
       vars:
@@ -64,12 +64,11 @@ spec:
                 sources:
                   - repoURL: ${{ vars.repoURL }}
 
-  # Health check after promotion. Phase 6.3 appends `chaos-gate` here (after
-  # health-check) so a freight only reaches prod if it survives the experiments.
+  # Freight only reaches prod if it survives the chaos experiments.
   verification:
     analysisTemplates:
       - name: health-check
-      - name: chaos-gate          # runs the fault-injection gate; Job exit code = verdict
+      - name: chaos-gate          # fault-injection gate; Job exit code = verdict
     args:
       - name: service-url
         value: http://url-shortener-staging.url-shortener-staging.svc.cluster.local:80

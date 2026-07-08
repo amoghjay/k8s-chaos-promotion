@@ -3,9 +3,7 @@ image:
 
 replicaCount: 2
 
-# Anti-affinity spreads pods across nodes so a single node failure doesn't
-# take down the whole app. PDB ensures at least 1 pod stays running during
-# voluntary disruptions (node drain, rolling update).
+# Spread pods across nodes; keep at least 1 running through voluntary disruptions.
 podAntiAffinity:
   enabled: true
 podDisruptionBudget:
@@ -27,7 +25,7 @@ resources:
   limits: { cpu: 500m, memory: 512Mi }
 
 serviceAccount:
-  annotations: {}             # WI binding added in Phase 4/5 when ESO is set up
+  annotations: {}
 
 postgresql:
   auth:

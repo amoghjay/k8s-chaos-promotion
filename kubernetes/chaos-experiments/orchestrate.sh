@@ -1,56 +1,32 @@
 #!/usr/bin/env bash
-# Chaos-gate orchestrator. Runs as the `job` provider inside the Kargo
-# `chaos-gate` AnalysisTemplate. Its EXIT CODE is the promotion verdict.
+# Chaos-gate orchestrator. Runs as the Kargo AnalysisTemplate `job` provider;
+# the exit code is the promotion verdict. The Workflow reaching Accomplished
+# only means the faults fired — PASS/FAIL comes from score_experiment.py.
 #
-# Where it runs: the pod lands in `url-shortener` (the Kargo project ns, where
-# Kargo creates the AnalysisRun). So every kubectl call targets
-# `url-shortener-staging` EXPLICITLY — the pod's default ns is url-shortener,
-# and omitting -n would silently hit the wrong namespace.
-#
-# What `Accomplished` means: the Workflow reaching Accomplished only says the
-# faults fired and the trailing `settle` Suspend let metrics scrape. It does NOT
-# mean the app survived — PASS/FAIL comes solely from score_experiment.py below.
-#
-# Image requirement (decided when wiring the AnalysisTemplate): needs bash +
-# kubectl + python3. score_experiment.py uses only stdlib (urllib), so no pip.
-#
-# NOTE on `set -e`: deliberately omitted. Step 6 must keep scoring after a
-# failing experiment to print the full scorecard; -e would abort on the first
-# nonzero scorer exit. We use -uo pipefail and guard scorers with `|| rc=1`.
+# No `set -e`: scoring must continue past a failing experiment so the full
+# scorecard prints; scorer failures are collected via `|| rc=1`.
 set -uo pipefail
 
+# The pod runs in url-shortener but acts on url-shortener-staging, so every
+# kubectl call passes -n explicitly.
 NS=url-shortener-staging
 GATE_LABEL="app=chaos-gate"            # fixed label on every gate workflow (prune key)
-# In-cluster the CM mounts at /scripts. Override (SCRIPTS=$PWD, plus PROM_URL for
-# score_experiment.py) to run this SAME script from a laptop for debugging/game-days.
-SCRIPTS="${SCRIPTS:-/scripts}"
+SCRIPTS="${SCRIPTS:-/scripts}"         # CM mount in-cluster; set SCRIPTS=$PWD (+ PROM_URL) to run locally
 EXPERIMENTS=(postgres redis signer)    # workflow templateNames == scorer key prefixes
 
-# Scoring window per experiment = duration + settle. Set to the per-node
-# deadlines in workflow.yaml (inside a Workflow the chaos `duration` field is
-# ignored — the fault lasts until the node deadline).
-# Over-wide windows are SAFE for the verdict: each check is dependency-scoped
-# (dependency_up{postgres}, redis p95, etc.) and the gate is an OR, so a wider
-# window can't manufacture a false PASS. Its only cost is diagnostic
-# ATTRIBUTION — a neighbor's fault landing in the bleed zone could show its ✗ on
-# the wrong experiment's row. (Confirm no check can spuriously FAIL on width:
-# diff wide-vs-narrow observed values via `score_experiment.py --prom` against a
-# real run. See LEARNINGS 6.3.)
+# Scoring window per experiment = duration + settle. Must match the per-node
+# deadlines in workflow.yaml (inside a Workflow the fault lasts until the node
+# deadline, not the chaos `duration`).
 declare -A DURATION=( [postgres]=120 [redis]=90 [signer]=90 )
 
-# ── Step 1: prune prior runs ──────────────────────────────────────────────────
-# generateName → no predictable name, so prune by the fixed label. Deleting a
-# Workflow cascades (owner refs) to its workflownodes + spawned PodChaos.
+# Workflows use generateName, so prune prior runs by the fixed label. Deleting
+# a Workflow cascades (owner refs) to its workflownodes and spawned PodChaos.
 echo ">> pruning prior gate workflows"
 kubectl -n "$NS" delete workflow -l "$GATE_LABEL" --ignore-not-found
 
-# Sweep leftover chaos too. A podchaos can hang in Terminating on the
-# chaos-mesh/records finalizer (chaos controller fails to clear it) — its fault
-# then leaks past its window and keeps disrupting the target (this once wedged
-# the signer ~44m → loadgen preflight failed → a FALSE-PASS gate run). Deleting
-# the parent workflow does NOT cascade to an already-orphaned podchaos, and
-# `kubectl delete` is a no-op once it's stuck Terminating — so delete leftovers
-# by workflow label, then force-clear finalizers on anything still stuck.
+# A podchaos stuck Terminating on the chaos-mesh/records finalizer keeps its
+# fault active past the window, and the cascade delete misses already-orphaned
+# objects — delete leftovers, then force-clear finalizers on anything stuck.
 echo ">> sweeping leftover/orphaned chaos objects"
 kubectl -n "$NS" delete podchaos -l chaos-mesh.org/workflow --ignore-not-found --wait=false 2>/dev/null
 for pc in $(kubectl -n "$NS" get podchaos \
@@ -59,25 +35,17 @@ for pc in $(kubectl -n "$NS" get podchaos \
   kubectl -n "$NS" patch podchaos "$pc" --type merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null
 done
 
-# ── Step 2: fire loadgen ──────────────────────────────────────────────────────
-# The Workflow's own 90s `warmup` Suspend absorbs k6 ramp, so we fire-and-forget
-# here. loadgen Job self-cleans via ttlSecondsAfterFinished.
+# Fire-and-forget: the workflow's 90s warmup Suspend absorbs the k6 ramp.
 LOADGEN="loadgen-$(date +%s)"
 echo ">> starting loadgen: $LOADGEN"
 kubectl -n "$NS" create job --from=cronjob/loadgen "$LOADGEN"
 
-# ── Step 3: create the workflow, capture the generateName'd name ──────────────
 WF=$(kubectl -n "$NS" create -f "$SCRIPTS/workflow.yaml" -o jsonpath='{.metadata.name}')
 echo ">> created workflow: $WF"
 
-# ── Step 4: wait for faults to finish + metrics to settle ─────────────────────
-# Poll the Accomplished condition instead of `kubectl wait`. `kubectl wait` does a
-# GET immediately after our create and BAILS with NotFound if that GET hits a
-# lagging API-server replica (read-after-write race — GKE runs an HA control
-# plane). It does NOT retry on NotFound, so the gate flaked: one run saw "condition
-# met", the next saw `workflows... not found` ~3s in and failed spuriously. A poll
-# loop tolerates the transient miss: an absent object yields an empty jsonpath, so
-# we just keep polling until Accomplished=True or the 15m budget is spent.
+# Poll for Accomplished instead of `kubectl wait`: wait's first GET can hit a
+# lagging API-server replica right after the create and bail on NotFound
+# without retrying; a poll loop tolerates the transient miss.
 echo ">> waiting for $WF to reach Accomplished (<=15m)"
 acc=""
 for _ in $(seq 1 180); do            # 180 * 5s = 900s
@@ -90,9 +58,7 @@ if [ "$acc" != "True" ]; then
   echo "!! workflow did not Accomplish within timeout — scoring whatever data exists"
 fi
 
-# ── Step 5: extract per-experiment inject times (node .spec.startTime) ────────
-# Select THIS run's nodes by the per-run workflow label, map templateName→startTime.
-# startTime is already YYYY-MM-DDTHH:MM:SSZ — exactly what --inject-at parses.
+# Map templateName -> node .spec.startTime: the per-experiment inject times.
 declare -A T
 while read -r tname tstart; do
   [ -n "$tname" ] && T[$tname]=$tstart
@@ -101,9 +67,8 @@ done < <(
     -o jsonpath='{range .items[*]}{.spec.templateName}{" "}{.spec.startTime}{"\n"}{end}'
 )
 
-# ── Step 6: score each experiment; ANY fail → gate fails ──────────────────────
-# Track WHICH experiments failed (not just rc) so the Grafana annotation (step 8)
-# can say "failed: postgres" instead of a bare FAIL.
+# Score each experiment; any failure fails the gate. Track which failed so the
+# Grafana annotation can name them.
 rc=0
 failed=""
 for exp in "${EXPERIMENTS[@]}"; do
@@ -119,12 +84,8 @@ for exp in "${EXPERIMENTS[@]}"; do
   fi
 done
 
-# ── Step 6.5: capture the k6 loadgen summary into THIS log (diagnostic only) ────
-# rc (the verdict) is already decided from Prometheus above — this block NEVER
-# touches it. loadgen (DURATION=10m) outlives the workflow (~7.5m) + scoring, so
-# it's usually still running here; wait (bounded) for it to finish, then echo its
-# k6 summary so it lives in the gate log instead of vanishing with the pod (TTL)
-# or needing a manual fetch. Best-effort: a missing pod / timeout just prints a note.
+# Diagnostic only — the verdict is already decided above. Wait (bounded) for
+# loadgen to finish so its k6 summary lands in this log before the pod's TTL.
 echo ">> waiting (<=4m) for loadgen $LOADGEN to finish, to capture its k6 summary"
 for _ in $(seq 1 48); do
   conds=$(kubectl -n "$NS" get job "$LOADGEN" -o jsonpath='{range .status.conditions[*]}{.type}{" "}{end}' 2>/dev/null)
@@ -141,18 +102,13 @@ else
 fi
 echo "----- end k6 summary -----"
 
-# ── Step 7: mark the run on the Grafana dashboard timeline (NON-FATAL) ────────
-# Region annotation over the workflow window, tagged verdict:pass|fail, so the
-# "Chaos Verdict & Impact" dashboard shows a green/red marker aligned with the
-# impact panels — Kargo's bare "Analysis failed" gets a one-glance "why".
-# annotate.py self-skips if $GRAFANA_TOKEN is unset (e.g. a standalone debug run),
-# and is wrapped so it can NEVER change the verdict.
+# Mark the run on the Grafana dashboard timeline. annotate.py self-skips
+# without credentials and is wrapped so it can never change the verdict.
 WF_START=$(kubectl -n "$NS" get workflow "$WF" -o jsonpath='{.status.startTime}' 2>/dev/null)
 WF_END=$(kubectl -n "$NS" get workflow "$WF" -o jsonpath='{.status.endTime}' 2>/dev/null)
 python3 "$SCRIPTS/annotate.py" \
   --verdict "$([ $rc -eq 0 ] && echo pass || echo fail)" \
   --failed "$failed" --start "$WF_START" --end "$WF_END" --workflow "$WF" || true
 
-# ── Step 8: verdict ───────────────────────────────────────────────────────────
 echo ">> GATE VERDICT: $([ $rc -eq 0 ] && echo PASS || echo FAIL)"
 exit $rc

@@ -1,3 +1,6 @@
+# Serial chaos-gate run: warmup, three pod-failure faults, settle. Inside a
+# Workflow each fault lasts until its node deadline (the chaos `duration` field
+# is ignored).
 apiVersion: chaos-mesh.org/v1alpha1
 kind: Workflow
 metadata:
@@ -10,17 +13,17 @@ spec:
   templates:
     - name: gate-serial
       templateType: Serial
-      deadline: 720s                # top-level hard cap (~12m)
+      deadline: 720s                # hard cap for the whole run (~12m)
       children: [warmup, postgres, redis, signer, settle]
 
     - name: warmup
       templateType: Suspend
-      deadline: 90s                 # k6 needs ~90s to reach steady state; 30s fired the first fault mid-ramp
+      deadline: 90s                 # k6 needs ~90s to reach steady state
 
     - name: postgres
       templateType: PodChaos
-      deadline: 120s                # PG needs the LONGER slot (~95s recovery)
-      podChaos:                      # <-- the chaos spec nests here, lowercased-kind key
+      deadline: 120s                # longer slot — PG recovery takes ~95s
+      podChaos:                     # chaos spec nests under the lowercased-kind key
         action: pod-failure
         mode: one
         selector:
@@ -36,7 +39,7 @@ spec:
       deadline: 90s
       podChaos:
         action: pod-failure
-        mode: one                          # single pod (the lone master)
+        mode: one
         selector:
           namespaces:
             - url-shortener-staging
@@ -50,12 +53,12 @@ spec:
       deadline: 90s
       podChaos:
         action: pod-failure
-        mode: one                          # single pod (signer runs 1 replica)
+        mode: one
         selector:
           namespaces:
             - url-shortener-staging
           labelSelectors:
-            app: radius-signer             # raw manifest pod label (jobs/radius-signer.yaml:14), NOT app.kubernetes.io/*
+            app: radius-signer      # pod template label, not app.kubernetes.io/name
 
     - name: settle
       templateType: Suspend

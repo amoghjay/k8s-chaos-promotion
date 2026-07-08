@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# Phase 04 — Helm installs of platform tools
-#
-# Order matters:
-#   1. cert-manager (Kargo hard dep — its webhooks need TLS certs)
-#   2. ArgoCD
-#   3. Argo Rollouts (CRDs for Kargo AnalysisTemplates)
-#   4. ESO (with WIF annotation — needs the new project's SA email)
-#   5. Kargo (last — needs cert-manager CRDs + argo-rollouts CRDs available)
-#
-# All use `helm upgrade --install` (idempotent) and `--wait` where applicable.
-#
-# Kargo admin password: prompts interactively unless KARGO_ADMIN_PASSWORD env var is set.
-# Token signing key: auto-generated if KARGO_TOKEN_SIGNING_KEY not set.
+# Phase 04 — Helm installs of platform tools (idempotent: helm upgrade --install).
+# Order matters: cert-manager and Argo Rollouts must precede Kargo (webhook TLS + CRDs).
+# KARGO_ADMIN_PASSWORD prompts if unset; KARGO_TOKEN_SIGNING_KEY auto-generates if unset.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

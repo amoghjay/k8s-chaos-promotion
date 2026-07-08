@@ -1,8 +1,7 @@
 name: Build & Push gate-runner
 
-# Tooling image for the chaos-gate Job (bash + kubectl + python3). Changes ~never
-# (only on a kubectl bump), so it fires only on its own Dockerfile path — NOT
-# coupled to signer/app builds. Mirrors build-radius-signer.yaml's WIF/GAR auth.
+# Tooling image for the chaos-gate Job (bash + kubectl + python3). Changes
+# rarely, so it fires only on its own Dockerfile path.
 on:
   push:
     branches: [main]
@@ -50,8 +49,8 @@ jobs:
           file: ./docker/gate-runner/Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          # :v1 = the stable tag the AnalysisTemplate references (imagePullPolicy: Always
-          # keeps it fresh); :sha- for traceability of exactly what a gate run used.
+          # :v1 is the stable tag the AnalysisTemplate references (kept fresh by
+          # imagePullPolicy: Always); :sha- gives traceability per gate run.
           tags: |
             ${{ env.IMAGE }}:v1
             ${{ env.IMAGE }}:latest

@@ -1,20 +1,8 @@
 #!/usr/bin/env bash
-# Phase 06 — GitOps + Kargo orchestration
-#
-# CRITICAL ORDERING (encoded from migration gotcha #4):
-#   ApplicationSet MUST be applied BEFORE Kargo Warehouse.
-#   Otherwise Stage step-6 (argocd-update) fails with:
-#     "unable to find Argo CD Application 'url-shortener-dev' in namespace 'argocd'"
-#   and the failed Promotion needs manual recovery.
-#
-# Sequence:
-#   1. Apply root-app (spawns observability + chaos-jobs)
-#   2. Wait for monitoring ns to exist (root-app creates it)
-#   3. Apply Grafana ExternalSecret (deferred from Phase 05)
-#   4. Apply Kargo Project + ProjectConfig + credentials-git + AnalysisTemplate + 3 Stages
-#   5. Apply ApplicationSet (creates url-shortener-{dev,staging,prod} ArgoCD apps)  ← BEFORE warehouse
-#   6. Apply Kargo Warehouse (starts polling GAR)
-#   7. Force chaos-jobs sync (was OutOfSync because url-shortener-staging ns didn't exist on first try)
+# Phase 06 — GitOps + Kargo orchestration.
+# Ordering constraint: apply the ApplicationSet before the Kargo Warehouse, or the
+# argocd-update promotion step fails ("unable to find Argo CD Application") and the
+# failed Promotion needs manual recovery.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,8 +55,8 @@ if [ "$DRY_RUN" != "true" ]; then
     60
 fi
 
-# --- 4. ApplicationSet — BEFORE Warehouse (gotcha #4) ---
-log_info "Applying ApplicationSet (must precede Warehouse — see migration gotcha #4)"
+# --- 4. ApplicationSet — must precede Warehouse ---
+log_info "Applying ApplicationSet (must precede Warehouse or argocd-update fails)"
 k8s_apply "$K8S_DIR/apps/applicationset.yaml"
 
 if [ "$DRY_RUN" != "true" ]; then

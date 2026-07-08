@@ -3,7 +3,7 @@ image:
 
 replicaCount: 1
 
-# No PDB or anti-affinity needed in dev — single replica is fine
+# Single replica in dev — no PDB or anti-affinity needed
 podAntiAffinity:
   enabled: false
 podDisruptionBudget:
@@ -23,7 +23,7 @@ resources:
   limits: { cpu: 200m, memory: 256Mi }
 
 serviceAccount:
-  annotations: {}             # WI binding added in Phase 4/5 when ESO is set up
+  annotations: {}
 
 postgresql:
   auth:

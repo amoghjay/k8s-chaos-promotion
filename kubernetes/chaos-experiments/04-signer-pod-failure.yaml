@@ -1,49 +1,16 @@
-# Experiment 4 — radius-signer pod-failure (payment-generation outage + replay correctness)
-#
-# Unique locus: 01/03 hit the APP's dependencies; this hits the LOAD-DRIVER's
-# dependency. The url-shortener app never calls the signer (it calls the
-# facilitator); the loadgen calls the signer to mint a Permit2 signature, THEN
-# calls /shorten. So a signer outage is invisible to the app — it's a bystander.
-#
-# Predicted signature (single run):
-#   - sign_success_rate collapses toward 0 during the outage (loadgen's
-#     /sign-permit2 calls fail) and recovers to ~100% after restart
-#   - loadgen bails BEFORE /shorten on a failed sign (loadgen.js:203), so
-#     shorten_* metrics just THIN OUT (fewer samples) — they do NOT spike 4xx/5xx
-#   - url-shortener app is UNTOUCHED: /health "ok", 0 restarts, no 402/5xx —
-#     it never receives the request
-#   - recovery is gated on the signer re-running _bootstrap() (idempotent SBC
-#     allowance checks via RPC, signer/main.py:210) — sign_success returns once
-#     wallets re-report bootstrapped, not the instant the pod is back
-#
-# CORRECTNESS PROOF (04's reason to exist — availability is the boring half):
-#   - Permit2 uses a random 256-bit nonce (permit2.py:82), NOT a restart-sensitive
-#     counter — so a mid-load restart cannot reuse a spent nonce
-#   - shorten_409_rate stays at 0 across the restart. A 409 = "duplicate
-#     settlement_tx_hash, Permit2 replay caught at app layer" (loadgen.js:254).
-#     409==0 through the kill => no replay => the random-nonce design held.
-#
-# NOTE: pod-failure = clean disappearance, so the signer produces NO output.
-#       The plausible-but-INVALID output case (expired-deadline signatures →
-#       facilitator /verify rejects → app surfaces 402/verify-failed) belongs to
-#       exp 05 (TimeChaos), not here — pod-failure can't produce it.
-#
-# Watch:  signer_sign_total{outcome=...},  shorten_409_rate / shorten_201_rate,
-#         kube_pod_status_ready{pod=~"radius-signer.*"},  url-shortener restarts (expect 0)
-#
-# Run-protocol: trigger loadgen -> wait ~100s for k6 steady state -> apply this
-#               -> watch -> let 60s elapse -> delete -> score via query_range.
+# Kills the radius-signer pod for 60s: payment-signature generation outage.
+# The app never calls the signer, so it should stay healthy throughout.
 apiVersion: chaos-mesh.org/v1alpha1
 kind: PodChaos
 metadata:
   name: signer-pod-failure
-  namespace: url-shortener-staging   # CR lives in the target ns; ns is inject=enabled
+  namespace: url-shortener-staging
 spec:
   action: pod-failure
-  mode: one                          # single pod (signer runs 1 replica)
-  duration: "60s"                    # bounded — auto-recovers; NEVER omit (persistent fault)
+  mode: one
+  duration: "60s"   # must be bounded — omitting duration makes the fault persistent
   selector:
     namespaces:
       - url-shortener-staging
     labelSelectors:
-      app: radius-signer             # the pod template label (jobs/radius-signer.yaml:14), NOT app.kubernetes.io/*
+      app: radius-signer   # pod template label, not app.kubernetes.io/name

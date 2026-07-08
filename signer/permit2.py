@@ -12,10 +12,9 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 
 
-# Permit2 EIP-712 type tree.
-# `PermitWitnessTransferFrom` extends Permit2's `PermitTransferFrom` with the
-# x402 Witness pattern — Witness fields sourced from x402ExactPermit2Proxy:
-#   "Witness(address to,uint256 validAfter)"
+# Permit2 EIP-712 type tree. PermitWitnessTransferFrom extends Permit2's
+# PermitTransferFrom with the x402 Witness pattern; the Witness fields
+# ("address to, uint256 validAfter") come from x402ExactPermit2Proxy.
 PERMIT2_TYPES = {
     "PermitWitnessTransferFrom": [
         {"name": "permitted", "type": "TokenPermissions"},
@@ -36,7 +35,7 @@ PERMIT2_TYPES = {
 
 
 def permit2_domain(chain_id: int, permit2_address: str) -> dict:
-    """Permit2 EIP-712 domain. NO `version` field — Uniswap's deliberate omission."""
+    """Permit2 EIP-712 domain. No `version` field — Uniswap deliberately omits it."""
     return {
         "name": "Permit2",
         "chainId": chain_id,
@@ -47,9 +46,8 @@ def permit2_domain(chain_id: int, permit2_address: str) -> dict:
 def normalize_v(signature: bytes) -> bytes:
     """Map v=0|1 → v=27|28 for signatures from hardware wallets or external signers.
 
-    eth-account's local sign already returns v=27|28; this is a defensive
-    one-liner so we don't silently fail facilitator ecrecover for sigs we
-    didn't produce in-process. See radius-dev gotchas.md#9.
+    eth-account's local sign already returns v=27|28; this guards against
+    silently failing facilitator ecrecover for sigs not produced in-process.
     """
     if len(signature) != 65:
         raise ValueError(f"signature must be 65 bytes, got {len(signature)}")

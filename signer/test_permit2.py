@@ -1,10 +1,6 @@
 """Unit tests for signer/permit2.py (pure functions, no RPC needed).
 
-Run from repo root:
-    python -m pytest signer/test_permit2.py -v
-
-Or directly:
-    python signer/test_permit2.py
+Run: python -m pytest signer/test_permit2.py -v  (or python signer/test_permit2.py)
 """
 
 from __future__ import annotations
@@ -119,13 +115,12 @@ def test_random_nonce_when_not_supplied():
         account, chain_id=CHAIN_ID, permit2_address=PERMIT2, token=SBC, amount=1,
         spender=X402_PROXY, pay_to=MERCHANT, deadline=1,
     )
-    # 2^256 random nonces — collision probability is negligible. If this fails,
-    # nonce randomness is broken.
+    # Nonces are random 256-bit values — a collision here means randomness is broken.
     assert a1["nonce"] != a2["nonce"]
 
 
 if __name__ == "__main__":
-    # Allow `python signer/test_permit2.py` to run without pytest.
+    # Runs the tests without pytest.
     import sys
     failures = 0
     for name, fn in list(globals().items()):

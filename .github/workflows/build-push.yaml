@@ -27,17 +27,14 @@ jobs:
       id-token: write
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── Docker Buildx (for multi-platform and cache support) ────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ── Authenticate to GCP via Workload Identity Federation ────────────────
-      # Keyless — no stored secrets. GitHub OIDC token is exchanged for a
-      # short-lived GCP access token scoped to github-actions-sa.
+      # Keyless WIF: the GitHub OIDC token is exchanged for a short-lived GCP
+      # access token scoped to github-actions-sa — no stored secrets.
       - name: Authenticate to GCP
         id: auth
         uses: google-github-actions/auth@v2
@@ -45,14 +42,11 @@ jobs:
           workload_identity_provider: projects/382767058620/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
           service_account: github-actions-sa@ajprojectplatform.iam.gserviceaccount.com
 
-      # ── Configure Docker to use gcloud credentials for GAR ──────────────────
       - name: Configure Docker for GAR
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      # ── Derive image tags ───────────────────────────────────────────────────
-      # On push to main  → :sha-<short> + :latest
-      # On pull_request  → :pr-<number> (not pushed)
-      # Kargo Warehouse picks up sha- tags via NewestBuild strategy
+      # Push to main → :sha-<short> + :latest; PR → :pr-<number> (not pushed).
+      # The Kargo Warehouse picks up sha- tags via its NewestBuild strategy.
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -63,7 +57,6 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=pr
 
-      # ── Build & push ────────────────────────────────────────────────────────
       - name: Build and push
         id: build
         uses: docker/build-push-action@v6
@@ -78,9 +71,8 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
 
-      # ── Cosign keyless signing ───────────────────────────────────────────────
-      # Skipped on PRs (image wasn't pushed).
-      # Signature stored as an OCI artifact in GAR alongside the image.
+      # Keyless signing; the signature is stored as an OCI artifact in GAR
+      # alongside the image. Skipped on PRs (image wasn't pushed).
       - name: Install Cosign
         if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3
@@ -93,9 +85,7 @@ jobs:
           cosign sign --yes \
             "${{ env.IMAGE }}@${DIGEST}"
 
-      # ── Quick smoke-test ─────────────────────────────────────────────────────
-      # Pull the freshly built image and verify it starts + /health returns 200.
-      # Only runs on main / tag pushes (not PRs, where image wasn't pushed).
+      # Pull the freshly built image and verify it starts and /health returns 200.
       - name: Smoke test
         if: github.event_name != 'pull_request'
         env:

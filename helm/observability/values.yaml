@@ -1,4 +1,4 @@
-# Namespaces where the URL shortener runs — ServiceMonitors are created for each
+# Namespaces where the URL shortener runs — a ServiceMonitor is created for each
 appNamespaces:
   - url-shortener-dev
   - url-shortener-staging
@@ -6,15 +6,13 @@ appNamespaces:
 
 kube-prometheus-stack:
   grafana:
-    # Admin password from ESO-managed secret (grafana-admin-secret in monitoring ns)
-    # Created by kubernetes/bootstrap/secrets/external-secrets-monitoring.yaml
+    # ESO-managed secret — see kubernetes/bootstrap/secrets/external-secrets-monitoring.yaml
     admin:
       existingSecret: grafana-admin-secret
       userKey: username
       passwordKey: password
 
-    # Loki wired as additional datasource
-    # Service name = <release-name>-loki = observability-loki (ArgoCD uses app name as release name)
+    # Loki service name is <release>-loki; ArgoCD uses the app name as release name
     additionalDataSources:
       - name: Loki
         type: loki
@@ -22,7 +20,7 @@ kube-prometheus-stack:
         access: proxy
         isDefault: false
 
-    # Sidecar picks up dashboard ConfigMaps labelled grafana_dashboard=1 from any namespace
+    # Pick up dashboard ConfigMaps labelled grafana_dashboard=1 from any namespace
     sidecar:
       dashboards:
         enabled: true
@@ -32,10 +30,9 @@ kube-prometheus-stack:
 
   prometheus:
     prometheusSpec:
-      # Retain 7 days of metrics — survives node scale-to-zero sessions
       retention: 7d
 
-      # PVC-backed storage — without this, emptyDir is used and metrics are lost on node drain
+      # PVC-backed — the emptyDir default loses metrics across node scale-to-zero
       storageSpec:
         volumeClaimTemplate:
           spec:
@@ -45,7 +42,7 @@ kube-prometheus-stack:
               requests:
                 storage: 10Gi
 
-      # Watch ServiceMonitors labelled release=observability across all namespaces
+      # Watch ServiceMonitors labelled release=observability in all namespaces
       serviceMonitorSelector:
         matchLabels:
           release: observability
@@ -58,7 +55,6 @@ kube-prometheus-stack:
     enabled: true
 
 promtail:
-  # DaemonSet — runs on every node, reads pod logs from /var/log/pods and ships to Loki
   config:
     clients:
       - url: http://observability-loki:3100/loki/api/v1/push
@@ -67,11 +63,9 @@ loki:
   deploymentMode: SingleBinary
 
   chunksCache:
-    enabled: false  # for single-binary mode, as local filesystem is used for both chunks and index, so no need for separate cache
+    enabled: false  # not needed in single-binary/filesystem mode
   resultsCache:
-    enabled: false  # for single-binary mode, as local filesystem is used for both chunks and index, so no need for separate cache
-
-
+    enabled: false  # not needed in single-binary/filesystem mode
 
   loki:
     auth_enabled: false
@@ -84,9 +78,7 @@ loki:
       configs:
         - from: "2024-01-01"
           store: tsdb
-          object_store: filesystem    # filesystem is intentional — logs are ephemeral by design.
-          # purpose is chaos experiment correlation, not long-term retention.
-          # for persistence, swap to object_store: gcs + IAM bindings for Loki SA.
+          object_store: filesystem    # intentional — logs are ephemeral by design; swap to gcs for persistence
           schema: v13
           index:
             prefix: loki_index_
@@ -95,7 +87,7 @@ loki:
     # Compactor must be enabled for retention_period to actually delete old logs
     compactor:
       retention_enabled: true
-      delete_request_store: filesystem # for single-binary mode, as object store is not used
+      delete_request_store: filesystem # no object store in single-binary mode
 
     limits_config:
       retention_period: 48h
